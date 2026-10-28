@@ -1,0 +1,16 @@
+# secrets and local config: never commit
+config.json
+tokens.json
+*.env
+
+# server state
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.bak
+*.tmp
+
+__pycache__/
+*.pyc

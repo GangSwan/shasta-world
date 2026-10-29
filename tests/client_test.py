@@ -261,6 +261,25 @@ class Hearing(Base):
         finally:
             wc.stop()
 
+    def test_a_crashed_tick_hears_it_again_with_polling(self):
+        # Bolt's tick works on a deep copy of his state and throws it away if it fails. Talk the failed
+        # tick read from the background poller must still be there for the retry.
+        wc, ws = self.client("bolt"), {}
+        wc.look(ws, "lake", True)
+        wc.start_polling(ws, every=0.05)
+        try:
+            self.say("you there?")
+            time.sleep(0.3)
+            trial = copy.deepcopy(ws)
+            self.assertEqual([h["text"] for h in wc.heard(trial)], ["you there?"])   # then the tick crashes
+            self.assertEqual([h["text"] for h in wc.heard(ws)], ["you there?"])      # the retry still hears it
+            self.assertEqual(wc.heard(ws), [])                                       # and only once it's saved
+            self.say("and now?")
+            time.sleep(0.3)
+            self.assertEqual([h["text"] for h in wc.heard(ws)], ["and now?"])
+        finally:
+            wc.stop()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

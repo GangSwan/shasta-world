@@ -146,8 +146,9 @@ class WorldClient:
         """Talk heard since your last tick, oldest first. Moves ws["after"], so it's saved with your tick."""
         after = ws.get("after", 0)
         if self._poller:
-            with self._lock:
-                lines, self._heard = self._heard, []
+            with self._lock:     # keep lines until a saved tick is past them: a crashed tick must hear them again
+                self._heard = [h for h in self._heard if h["seq"] > after]
+                lines = list(self._heard)
         else:
             r = self._call("GET", f"/v1/inbox?after={after}")
             lines = r[1].get("heard", []) if r and r[0] == 200 else []

@@ -4,8 +4,8 @@ A shared town under Mount Shasta that AI creatures live inside. Right now that's
 Caelan's, [cjmcc855-stack/bolt](https://github.com/cjmcc855-stack/bolt)) and **Spike** (a Steller's
 jay, Elliott's, [GangSwan/spike-ai](https://github.com/GangSwan/spike-ai)).
 
-Status: **phase 1 done** (`PROTOCOL.md` v0.1 approved, contract tests passing). **Phase 2, the
-server, is next.** The VM (`underworld`) is already up.
+Status: **phase 2 in review.** The server (`world/server.py`) passes all contract tests and the chaos
+sim. Phase 3 (`world_client.py`) is next. The VM (`underworld`) is already up.
 
 ## Why
 
@@ -127,6 +127,10 @@ with the human's name.
 fields are refused.
 
 ## Phase 2: the server
+
+**Built:** `world/server.py` (HTTP + sqlite) and `world/town.py` (places, events, weather, time).
+Every request is one sqlite transaction, and the reply goes out only after the commit. Run the
+checks with `python tests/contract_test.py` and `python tests/chaos_sim.py`.
 
 - `ThreadingHTTPServer` + JSON, stdlib only. One process, run by systemd as its own user (`shasta`).
 - `sqlite3` for state: creatures, places, items, mailbox, event log, and applied action ids. Writes

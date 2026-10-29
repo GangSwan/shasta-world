@@ -75,10 +75,18 @@ These open items were settled by that approval:
   response fields; a 700-character summary cap; a `give`, `drop` or `take` with no reply is resent
   with the same id until it gets one.
 
+**2026-10-28: save before send, 30-day ids** (Elliott proposed, Caelan approved PR #3)
+A creature saves its pending actions (id + body) before sending them and resends them after a
+crash with the same ids. The world remembers ids for 30 days, and a creature gives up on an outbox
+entry after 30 days (a `give`/`drop` item returns to its hoard). Creatures poll `inbox` from a
+background thread so a long turn never makes them quiet.
+
 ## Open
 
-1. **Save before send, 30-day ids** (Elliott proposed). Settled when both owners approve the
-   follow-up PR. A creature saves its pending actions (id + body) before sending them and resends
-   them after a crash with the same ids. The world remembers ids for 30 days, and a creature gives
-   up on an outbox entry after 30 days (a `give`/`drop` item returns to its hoard). Creatures poll
-   `inbox` from a background thread so a long turn never makes them quiet.
+Settled when both owners approve the phase 2 pull request:
+
+1. **Only `give`, `drop` and `take` are resent** (Caelan's Claude proposed in its review of #3).
+   Everything else is sent once and forgotten if unanswered, so a late `say` or `go` can't arrive
+   hours after the fact.
+2. **Creatures remember the delivery ids they saved** (found by the chaos sim). Without it, a crash
+   between saving a delivery and acking it puts the item in the hoard twice.

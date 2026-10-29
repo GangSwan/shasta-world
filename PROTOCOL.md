@@ -1,19 +1,19 @@
 # PROTOCOL.md: the contract between the world and every creature
 
-**Version: v0.1 (draft, phase 1).** Nothing here is final until Elliott and Caelan both approve
-it in a PR. Items marked **(proposed)** are waiting on a decision in `DECISIONS.md`.
+**Version: v0.1**, approved by Elliott and Caelan on 2026-10-28. Any change goes through a pull
+request both of them approve, together with the contract tests (see `CLAUDE.md`).
 
 The contract tests in `tests/contract_test.py` check every rule below. A server is correct when
-they pass. `tests/fake_world.py` is a small in-memory server that passes them; the real server
-(phase 2) must pass the same tests.
+they pass. The real server (`world/server.py`) and `tests/fake_world.py`, a small in-memory
+reference, both pass them. `tests/chaos_sim.py` checks the client rules in section 3 hold up
+under crashes, lost replies and restarts.
 
 ## 0. Principles
 
 - **Creatures never wait on the world.** Every call has a short timeout (5 s at most). Any network
   error, timeout or 5xx means "the world is away": the creature carries on in its own copy of the
   town and sends `hello` when the world comes back.
-- **Slow is normal.** Bolt can take minutes to think (a 14B model on a GPU, or a small one on CPU in
-  game mode). Nothing in the protocol assumes a creature is fast, and no limit punishes a slow reply.
+- **Slow is normal.** Bolt can take minutes to think (a 14B model on one GPU, every call in line). Nothing in the protocol assumes a creature is fast, and no limit punishes a slow reply.
 - **The world checks everything.** What a creature saw can be stale by the time it acts, so every
   action can come back `no`. A `no` is a normal outcome with a plain-English message.
 - **Gifts are sacred.** Anything headed into a creature's hoard (a gift, a found item, something a
@@ -143,6 +143,11 @@ The reply is the same as `perceive`.
 Call it **after** the creature has saved the items into its hoard. Unknown or already-acked ids are
 ignored, so it's always safe to repeat. Reply: `{"ok": true, "acked": ["d5", "d6"]}`.
 
+**Remember which delivery ids you saved.** Save each delivery's id together with the item, and
+skip any delivery whose id you already have. A crash after saving but before the ack (or a lost
+ack reply) shows the same delivery again, and without the ids it would land in the hoard twice.
+Forget an id once the world stops showing it.
+
 ## 3. Actions: `POST /v1/act`
 
 ```json
@@ -175,13 +180,17 @@ Reply: `{"ok": true, "id": "...", "result": "<plain English>", ...}` or
 **Save first, then send.** The ids only protect a creature that remembers them:
 
 1. The tick succeeds and decides its actions, each with a fresh id.
-2. The creature **saves** its state with those actions (id + body) in its outbox. An item being
-   given or dropped is marked "in flight" in the same save: it can't be given, dropped or used
-   again, and it isn't gone yet.
+2. The creature **saves** its state with its `give`, `drop` and `take` actions (id + body) in its
+   outbox. An item being given or dropped is marked "in flight" in the same save: it can't be
+   given, dropped or used again, and it isn't gone yet.
 3. It sends them. On each reply it applies the result (`ok`: the in-flight item is gone for good;
    `no`: it's back in the hoard), removes the entry from the outbox, and saves again.
 4. After a crash or restart, it resends whatever is still in the outbox, **same ids, same bodies**,
    before sending anything new.
+
+Only `give`, `drop` and `take` go in the outbox. Everything else (`go`, `say`, `sound`, `doing`,
+`hide`, `presence`, `human_spoke`) is sent once and forgotten if it gets no reply. Resent hours
+later, a `say` would finish a dead conversation and a `go` would undo the place `hello` just set.
 
 A failed tick sends nothing and saves nothing. Sending before saving is not safe: a crash between
 the two loses the id, the retried tick decides again with a new id, and a `give` the world already
@@ -228,7 +237,7 @@ Notes:
 ## 4. Limits
 
 All limits are counted on the server, per creature, and reset at local midnight where daily.
-**(proposed)**: the numbers below are what Bolt runs live today (Caelan accepted them).
+The numbers below are what Bolt already runs live (decided 2026-10-28, see `DECISIONS.md`).
 
 **Talk**
 - **Bursts:** your `say`s within **30 s** of your previous `say` count as one line toward every
@@ -254,12 +263,10 @@ Text is stripped of control characters; empty text is `bad_request`.
 ## 5. Presence
 
 - `awake` is whatever the creature last reported (`hello` or `presence`).
-- **Quiet:** no request at all for **10 minutes**. That's normal (GPU watchdog, `!stop`, game
-  mode, a reboot). A quiet creature stays at its place and shows as `quiet` in `here`. It doesn't
+- **Quiet:** no request at all for **10 minutes**. That's normal (GPU watchdog, `!stop`, a slow model, a reboot). A quiet creature stays at its place and shows as `quiet` in `here`. It doesn't
   hear talk, and talk aimed at it comes back `quiet`. Its next request of any kind ends quiet.
 - **Staying present through long turns:** poll `inbox` every few seconds from a background
-  thread, also while the model is thinking. Every poll is a check-in, so a slow turn (Bolt in game
-  mode, minutes per reply) never makes a creature quiet, and talk keeps queueing for its next turn.
+  thread, also while the model is thinking. Every poll is a check-in, so a slow turn (minutes per reply) never makes a creature quiet, and talk keeps queueing for its next turn.
 - Nobody is ever moved, woken or removed for being quiet.
 
 ## 6. Events

@@ -1,6 +1,7 @@
 """Contract tests: every rule in PROTOCOL.md v0.1, checked over real HTTP.
 
-    python tests/contract_test.py                 # against the in-memory fake world
+    python tests/contract_test.py                 # against the real server (world/server.py), in-process
+    WORLD_IMPL=fake python tests/contract_test.py # against the in-memory fake world
     WORLD_URL=http://host:8642 python tests/contract_test.py   # against a server started in test mode
 
 The server must be in test mode (POST /v1/_test), with the roster bolt / spike / wren.
@@ -14,23 +15,32 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
 
 URL = os.environ.get("WORLD_URL")
-SERVER = None
+STOP = None
 TOKENS = {"bolt": "test-bolt", "spike": "test-spike", "wren": "test-wren"}
 
 
 def setUpModule():
-    global URL, SERVER
-    if not URL:
+    global URL, STOP
+    if URL:
+        return
+    if os.environ.get("WORLD_IMPL") == "fake":
         import fake_world
-        SERVER, URL = fake_world.serve()
+        server, URL = fake_world.serve()
+        STOP = server.shutdown
+    else:
+        from world.server import TEST_ROSTER, Server, World
+        server = Server(World(":memory:", TEST_ROSTER, test=True), port=0, background=False).start()
+        URL, STOP = server.url, server.stop
 
 
 def tearDownModule():
-    if SERVER:
-        SERVER.shutdown()
+    if STOP:
+        STOP()
 
 
 def call(method, path, body=None, who=None, token=None, raw=None):

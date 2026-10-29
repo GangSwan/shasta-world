@@ -98,6 +98,14 @@ When GitHub is back, everything is pushed there, history included, and the serve
 
 ## Open
 
+Settled when Caelan OKs the `around-town` branch:
+
+4. **Creatures see where everyone else is** (Elliott proposed). `perceive` gains `around` (every other
+   connected creature's place and state) and the summary an "Around town:" line, so Spike and Bolt
+   can go find each other on purpose instead of meeting by chance. Unknown fields are ignored, so
+   it changes nothing for a creature that doesn't use it.
+
+
 Settled when both owners approve the phase 2 pull request:
 
 1. **Only `give`, `drop` and `take` are resent** (Caelan's Claude proposed in its review of #3).

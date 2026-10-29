@@ -159,7 +159,7 @@ class World:
         return {"left_today": max(0, SAY_PER_DAY - c["said"]),
                 "break_until": pacific(c["break_until"]).isoformat(timespec="seconds") if c["break_until"] > t else None}
 
-    def _summary(self, c, t, here, items, recent, deliveries):
+    def _summary(self, c, t, here, items, recent, deliveries, around=()):
         lt = pacific(t)
         part = self._part(lt.hour)
         w = self.weather
@@ -171,6 +171,10 @@ class World:
                                   for h in here))
         else:
             lines.append("Nobody else is here.")
+        if around:
+            lines.append("Around town: " + "; ".join(f"{o['name']} is at {PLACES[o['place']]} ("
+                                                     + ("away" if o["state"] == "quiet" else o["state"]) + ")"
+                                                     for o in around) + ".")
         if items:
             bits = [a_or_an(i["name"]) + (f" ({i['by']} left it for {self.creatures[i['for']]['name']})" if i["for"] else "")
                     for i in items[:5]]
@@ -202,6 +206,8 @@ class World:
         here = [{"id": o["id"], "name": o["name"], "state": self._state(o, t), "doing": o["doing"]}
                 for o in self.creatures.values()
                 if o is not c and o["seen"] is not None and o["place"] == c["place"]]
+        around = [{"id": o["id"], "name": o["name"], "place": o["place"], "state": self._state(o, t)}
+                  for o in self.creatures.values() if o is not c and o["seen"] is not None and o["place"] != c["place"]]
         items = [{"id": i["id"], "name": i["name"], "by": i["by"], "for": i["for"]}
                  for i in self.items.values() if i["place"] == c["place"]]
         recent = [e for _, e in self.events[c["place"]][-5:]]
@@ -210,9 +216,9 @@ class World:
                 "weather": dict(self.weather),
                 "you": {"id": c["id"], "place": c["place"], "awake": c["awake"]},
                 "place": {"id": c["place"], "name": PLACES[c["place"]]},
-                "here": here, "items": items, "recent": recent, "cant_go": self._cant_go(c),
+                "here": here, "around": around, "items": items, "recent": recent, "cant_go": self._cant_go(c),
                 "talk": self._talk(c, t), "deliveries": deliveries,
-                "summary": self._summary(c, t, here, items, recent, deliveries)}
+                "summary": self._summary(c, t, here, items, recent, deliveries, around)}
 
     # ---------- requests
     def handle(self, method, path, query, token, body):

@@ -548,6 +548,22 @@ class Presence(Base):
         self.hello("spike", "lake", awake=False)
         self.assertEqual(self.see("bolt")["here"][0]["state"], "asleep")
 
+    def test_around_town(self):
+        self.hello("bolt", "junkyard")
+        self.hello("spike", "fir", awake=False)
+        seen = self.see("bolt")
+        self.assertEqual(seen["around"], [{"id": "spike", "name": "Spike", "place": "fir", "state": "asleep"}])
+        self.assertIn("Around town: Spike is at Spike's fir (asleep).", seen["summary"])
+        self.assertEqual(seen["here"], [])
+        self.hello("spike", "junkyard")
+        seen = self.see("bolt")
+        self.assertEqual(seen["around"], [], "someone right here isn't 'around'")
+        self.assertNotIn("Around town", seen["summary"])
+        self.hook({"advance": 700})
+        self.hello("bolt", "lake")
+        around = self.see("bolt")["around"]
+        self.assertEqual([(o["id"], o["state"]) for o in around], [("spike", "quiet")], "wren never connected")
+
 
 class Limits(Base):
     def test_six_deeds_in_five_minutes(self):

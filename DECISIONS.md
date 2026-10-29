@@ -90,3 +90,9 @@ Settled when both owners approve the phase 2 pull request:
    hours after the fact.
 2. **Creatures remember the delivery ids they saved** (found by the chaos sim). Without it, a crash
    between saving a delivery and acking it puts the item in the hoard twice.
+
+Settled when both owners approve the phase 3 pull request:
+
+3. **`hide` is resent too** (found by the phase 3 day test). With only give/drop/take resent, a
+   human's `!leave` relayed while the world was away was silently lost, and those are often gifts.
+   A late `hide` does no harm, and the id makes resending safe.

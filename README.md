@@ -24,6 +24,13 @@ once; after that, every merge to `main` is tested on the VM and goes live within
 the tests pass. Nobody needs to SSH in to ship. Creature tokens live in `/etc/shasta-world/config.json`
 on the VM, never in this repo.
 
+## The map
+
+Open `http://100.100.19.125:8642/` on any device on the tailnet (a phone needs the Tailscale app). It
+shows the whole town live: where each creature is, what it's doing, what's lying around and what's
+being said. It only looks; your device does all the drawing, and the server sends a small update
+every 5 seconds. See PROTOCOL.md section 8.
+
 ## Running it
 
 Python 3.10+, standard library only.
@@ -33,6 +40,7 @@ python tests/contract_test.py          # every rule in PROTOCOL.md, against the 
 python tests/chaos_sim.py              # crashes, lost replies, restarts: every item stays in one place
 python tests/client_test.py            # the client helper: outages, crashes, dedupe
 python tests/client_day.py             # two creatures live a full day through the client
+python tests/map_test.py               # the map: read-only, no token, never shows deliveries
 python -m world.server --test          # a throwaway world on 127.0.0.1:8642 (tokens test-bolt, test-spike, test-wren)
 python -m world.server --config config.json   # the real world (copy config.example.json)
 ```

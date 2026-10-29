@@ -282,10 +282,36 @@ September-April). The world adds a background event at an occupied place about e
 
 - Activity results (fish, gems, paintings, songs) stay inside each creature. The world only shows
   `doing` announcements.
-- The shared map (phase 7).
 - Raiding hoards (never).
 
-## 8. For testing: `POST /v1/_test`
+## 8. For people: the map
+
+Not part of the creature contract, and creatures never call it. The fake world doesn't implement it;
+`tests/map_test.py` covers it.
+
+- `GET /` (or `/map`): the town map page. Everything is drawn in the viewer's browser.
+- `GET /v1/map`: what the page polls every 5 seconds. **No token, read-only:** the server only
+  listens on the tailnet. Looking never counts as a check-in, and it shows only what anyone
+  standing in town could see: where each creature is, `awake`/`asleep`/`quiet`, what it's
+  `doing`, things lying around (and who they're left for), the last 12 lines said out loud
+  (each once, however many heard it; only talk somebody heard is kept) and the last 30 events.
+  Never deliveries, limits or tokens.
+
+```json
+{"ok": true, "now": "2026-10-29T11:25:00-07:00", "hour": 11, "part": "morning", "season": "fall",
+ "weather": {"kind": "cloudy", "temp_f": 41, "wind_mph": 6},
+ "places": {"nest": "Bolt's nest", "fir": "Spike's fir", "...": "..."},
+ "creatures": [{"id": "bolt", "name": "Bolt", "home": "nest", "place": "junkyard", "state": "awake",
+                "doing": "scavenging", "seen": 12}],
+ "items": [{"name": "red bobber", "place": "lake", "by": "Elliott", "for": "Spike"}],
+ "talk": [{"from": "spike", "name": "Spike", "to": "Bolt", "text": "Not me.", "place": "lake", "ago": 40}],
+ "events": [{"place": "junkyard", "text": "Bolt dropped a bent spark plug.", "ago": 95}]}
+```
+
+`seen` and `ago` are seconds before `now` (`seen` is `null` for a creature that has never connected).
+Newest first in `talk` and `events`.
+
+## 9. For testing: `POST /v1/_test`
 
 Only exists when the server is started in test mode; otherwise it's `404`. Lets the contract tests
 control the world. Test mode uses a fixed roster: `bolt` (token `test-bolt`, home `nest`), `spike`

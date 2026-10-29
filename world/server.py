@@ -39,6 +39,8 @@ DEEDS, DEED_WINDOW = 6, 300
 FLOOD, FLOOD_WINDOW = 30, 300
 DOING_FOR = 900
 HEARD_KEEP, IDS_KEEP = 86400, 30 * 86400
+MAP_TALK, MAP_EVENTS = 12, 30       # what the map page shows: the newest talk lines and events in town
+MAP_PAGE = Path(__file__).with_name("map.html")
 EVENTS_KEPT = 20
 SUMMARY_CHARS, SUMMARY_LINES = 700, 8
 EVENT_EVERY = (600, 1200)          # a background event at an occupied place every 10-20 minutes
@@ -292,6 +294,9 @@ class World:
         if path == "/v1/_test" and self.test and method == "POST":
             with self.lock:
                 return self._test_hook(body)
+        if method == "GET" and path == "/v1/map":
+            with self.lock:
+                return 200, self.map_view()
         if (method, path) not in ROUTES:
             return 404, {"ok": False, "reason": "not_found", "message": "No such endpoint."}
         cid = next((k for k, r in self.roster.items() if token and hmac.compare_digest(r["token"], token)), None)
@@ -315,6 +320,30 @@ class World:
             if path == "/v1/hello":
                 return 200, self.hello(c, t, body)
             return self.act(c, t, body)
+
+    def map_view(self):
+        """GET /v1/map: the whole town right now, for the map page people look at. Read-only and no token
+        (the server only listens on the tailnet): it never checks anyone in, and it shows only what any
+        creature standing there could see. No deliveries, no limits, no tokens."""
+        t = self.now()
+        lt = pacific(t)
+        cs = {cid: json.loads(d) for cid, d in self.db.execute("SELECT id, data FROM creatures") if cid in self.roster}
+        name = lambda cid: cs[cid]["name"] if cid in cs else cid
+        creatures = [{"id": c["id"], "name": c["name"], "home": c["home"], "place": c["place"],
+                      "state": self._state(c, t), "doing": c["doing"] if c["doing"] and t < c["doing_until"] else None,
+                      "seen": int(t - c["seen"]) if c["seen"] is not None else None}
+                     for c in sorted(cs.values(), key=lambda c: c["id"])]
+        items = [{"name": n, "place": place, "by": by, "for": name(f) if f else None} for n, place, by, f in
+                 self.db.execute("SELECT name, place, by, for_ FROM items ORDER BY n")]
+        talk = [{"from": frm, "name": nm, "to": name(to) if to else None, "text": text, "place": place, "ago": int(t - at)}
+                for frm, nm, to, text, place, at in self.db.execute(
+                    "SELECT frm, name, to_, text, place, MAX(t) FROM heard GROUP BY frm, t, text ORDER BY MAX(t) DESC LIMIT ?",
+                    (MAP_TALK,))]
+        events = [{"place": place, "text": text, "ago": int(t - at)} for place, text, at in self.db.execute(
+            "SELECT place, text, t FROM events ORDER BY n DESC LIMIT ?", (MAP_EVENTS,))]
+        return {"ok": True, "now": lt.isoformat(timespec="seconds"), "hour": lt.hour, "part": part_of_day(lt.hour),
+                "season": season(lt.month), "weather": self.weather(), "places": PLACES,
+                "creatures": creatures, "items": items, "talk": talk, "events": events}
 
     def _test_hook(self, body):
         if not isinstance(body, dict):
@@ -617,8 +646,19 @@ def make_handler(world):
             self.end_headers()
             self.wfile.write(data)
 
+        def _page(self):
+            data = MAP_PAGE.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _serve(self, method):
             u = urlparse(self.path)
+            if method == "GET" and u.path in ("/", "/map"):
+                return self._page()
             auth = self.headers.get("Authorization", "")
             token = auth[7:] if auth.startswith("Bearer ") else None
             body = None

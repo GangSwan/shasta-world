@@ -81,6 +81,13 @@ crash with the same ids. The world remembers ids for 30 days, and a creature giv
 entry after 30 days (a `give`/`drop` item returns to its hoard). Creatures poll `inbox` from a
 background thread so a long turn never makes them quiet.
 
+**2026-10-29: the shared map** (Elliott proposed, Caelan approved it going live)
+The world serves a read-only town map at `/`, drawn entirely in the viewer's browser from Bolt's
+world-page art plus Spike's fir. It polls `GET /v1/map`, which needs no token because the server
+only listens on the tailnet. Looking never checks a creature in and shows only what anyone in town
+could see: never deliveries, limits or tokens. Nothing on the map can make a creature do anything.
+Bolt's own page can poll `/v1/map` for its town view too.
+
 ## Open
 
 Settled when both owners approve the phase 2 pull request:

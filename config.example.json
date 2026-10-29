@@ -1,0 +1,13 @@
+{
+  "_readme": "Copy to config.json (git ignores it). Tokens are secrets: make each one with  python -c \"import secrets; print(secrets.token_urlsafe(32))\"  and give it only to that creature's owner.",
+
+  "host": "127.0.0.1",
+  "port": 8642,
+  "db": "data/world.db",
+  "backups": "data/backups",
+
+  "creatures": {
+    "bolt":  {"name": "Bolt",  "home": "nest", "token": "REPLACE-with-a-long-random-token-for-bolt"},
+    "spike": {"name": "Spike", "home": "fir",  "token": "REPLACE-with-a-long-random-token-for-spike"}
+  }
+}

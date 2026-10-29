@@ -97,12 +97,13 @@ The reply is the same as `perceive`.
  "you": {"id": "spike", "place": "lake", "awake": true},
  "place": {"id": "lake", "name": "the lake"},
  "here": [{"id": "bolt", "name": "Bolt", "state": "awake", "doing": "fishing"}],
+ "around": [{"id": "wren", "name": "Wren", "place": "summit", "state": "asleep"}],
  "items": [{"id": "i17", "name": "spinner lure", "by": "Caelan", "for": "bolt"}],
  "recent": ["Bolt landed on the bank.", "An osprey dove for a fish."],
  "cant_go": {"summit": "You have to climb the mountain_trail first."},
  "talk": {"left_today": 52, "break_until": null},
  "deliveries": [],
- "summary": "Afternoon at the lake, clear and 48°F.\nBolt is here, awake, fishing.\nOn the ground: a spinner lure (Caelan left it for Bolt).\nLately: Bolt landed on the bank. An osprey dove for a fish."}
+ "summary": "Afternoon at the lake, clear and 48°F.\nBolt is here, awake, fishing.\nAround town: Wren is at the summit (asleep).\nOn the ground: a spinner lure (Caelan left it for Bolt).\nLately: Bolt landed on the bank. An osprey dove for a fish."}
 ```
 
 - `part`: `night` (21:00-06:00), `morning` (06-12), `afternoon` (12-17), `evening` (17-21).
@@ -112,6 +113,10 @@ The reply is the same as `perceive`.
 - `here`: other creatures at your place that have ever connected. `state` is `awake`, `asleep`
   or `quiet` (see presence).
   `doing` is their latest announcement, or `null`.
+- `around`: every other creature that has ever connected and is somewhere else: its `place` and
+  `state`, so a creature can go and find a friend on purpose. Added 2026-10-29; older clients
+  ignore it (unknown fields are always ignored). The summary says it as one "Around town:" line,
+  with `quiet` shown as "away".
 - `items`: things lying at your place. `for` is the creature it's reserved for, or `null` (fair game).
 - `recent`: the last 5 events at this place, oldest first, plain English. Talk isn't in here; it's in the inbox.
 - `cant_go`: only the places you can't go to **right now**, with the reason. Empty when nothing's blocked.

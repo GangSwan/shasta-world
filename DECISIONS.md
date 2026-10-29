@@ -96,6 +96,11 @@ on its own branch first and is merged into main only when the other owner OKs it
 Caelan sends his changes as a git bundle or patch (over Discord) and Elliott's Claude applies them.
 When GitHub is back, everything is pushed there, history included, and the server points back at it.
 
+**2026-10-29: creatures see where everyone else is** (Elliott proposed, Caelan OK'd the `around-town` branch)
+`perceive` gains `around` (every other connected creature's place and state) and the summary an
+"Around town:" line, so Spike and Bolt can go find each other on purpose instead of meeting by
+chance. Unknown fields are ignored, so it changes nothing for a creature that doesn't use it.
+
 ## Open
 
 Settled when both owners approve the phase 2 pull request:

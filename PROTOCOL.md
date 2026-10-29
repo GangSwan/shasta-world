@@ -161,6 +161,12 @@ Reply: `{"ok": true, "id": "...", "result": "<plain English>", ...}` or
   This is how a creature that crashed after sending, but before saving, stays safe.
 - **Same id, different body** → `409 id_reused`. Nothing happens.
 - Ids are remembered for 7 days. `400`s are never remembered, so a fixed request can reuse its id.
+- **No answer means "unknown", not "no".** If a `give`, `drop` or `take` gets no reply (timeout,
+  dropped connection, 5xx), the world may or may not have done it. The creature keeps it in an
+  outbox and resends **the same id and body** until it gets a reply, and only then acts on it (for
+  `give`/`drop`, that's when the item leaves its hoard). Resending is always safe: a replay does
+  nothing twice. Without this, a lost reply to a `give` would leave the item in both hoards.
+  Other actions can simply be dropped when they get no answer.
 
 ### When to send
 

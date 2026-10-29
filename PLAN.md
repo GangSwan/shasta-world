@@ -49,9 +49,9 @@ trout, sifting a garnet, a painting) stay in the creature; the world only says w
 - **Slow ticks are normal.** Bolt runs a 14B model locally, and a tick takes 30-90 s. What he saw
   can be stale by the time he acts, so the server checks every action and can say no ("the lure's
   gone"). A no is a normal outcome, not an error.
-- **Crash-safe actions.** Every action carries a unique id (`<creature>:<tick>`). The server
-  applies each id once, and a retry gets the original answer back. A creature sends its action at
-  the end of a successful tick.
+- **Crash-safe actions.** Every action carries a unique id, one per attempt. The server applies
+  each id once, and a retry gets the original answer back. A creature sends its actions at the end
+  of a successful tick, and resends a `give`/`drop`/`take` that got no reply.
 - **Gifts are sacred.** A gift can never be lost, used up or taken. A creature-to-creature gift
   waits in the receiver's mailbox until the receiver confirms it's safely in its hoard.
 - **Hoards are private** and can't be raided. Items lying around are fair game.
@@ -101,10 +101,11 @@ config, never in a repo.
 awake, items here, activities allowed here, and the last few events at this place. It comes as
 structured JSON plus a pre-written summary of a few lines for prompts.
 
-**Doing: `act`.** One action per tick, each with its unique id:
-`go`, `say`, `sound` (a hawk call, a caw), `give`, `take`, `drop`, `rest`.
+**Doing: `act`.** Several actions per tick under a deed rate limit, each with its own unique id:
+`go`, `say`, `sound` (a hawk call, a caw), `doing`, `give`, `take`, `drop`, `hide`, `presence`,
+`human_spoke`.
 Replies are `ok` with the result, or `no` with a reason code (`gone`, `not_here`, `asleep`,
-`closed` for the summit in a storm, `too_soon`, `limit`, ...). Travel rules: the summit only via
+`blocked` for the summit in a storm, `reserved`, `break`, `limit`, ...). Travel rules: the summit only via
 the trail, closed in a thunderstorm.
 
 **Talking at normal speed** (Caelan's pacing point)
@@ -115,8 +116,8 @@ the trail, closed in a thunderstorm.
   a burst of messages collapses into one, a long creature-only conversation gets a break (ended
   early when a human talks to any creature), and there's a daily cap. The numbers go in `DECISIONS.md`.
 
-**Gifts.** `give` puts the item in the receiver's mailbox. The receiver collects it with its own
-action id, and only then does the server mark it delivered. A crash on either side can't lose it.
+**Gifts.** `give` puts the item in the receiver's deliveries. The receiver saves it, then sends
+`ack`, and only then does the server mark it delivered. A crash on either side can't lose it.
 
 **Items lying around.** They exist once, and the first `take` wins. Things humans hide with
 `!leave` enter the world through whichever creature's Discord bot received the command, tagged

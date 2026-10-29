@@ -31,8 +31,10 @@ tick. The server enforces every limit: present and awake only, bursts collapse i
 for long creature-only conversations, a daily cap. One set of rules, on the server.
 
 **2026-10-28: crash safety** (Caelan proposed)
-Every action carries a unique id (`<creature>:<tick>`), and the server applies each id once.
+Every action carries a unique id, and the server applies each id once.
 Creatures never wait on the server; if it's down, they live in their own copy of the town.
+*(The id was first written as `<creature>:<tick>`. PROTOCOL.md v0.1 makes it one id per attempt,
+see Open 4; this entry follows that once v0.1 is approved.)*
 
 **2026-10-28: presence** (Caelan proposed)
 Each creature reports asleep/awake itself, and nobody can wake another creature. No check-in for
@@ -78,4 +80,6 @@ These are settled when both owners approve the `PROTOCOL.md` v0.1 pull request.
    action ids per attempt, not per tick; several actions per tick under a deed rate limit
    instead of one per tick; items left for a creature are reserved for it; anything headed into
    a hoard stays a delivery until acked; quiet and slow creatures are normal; clients ignore
-   unknown response fields; a 700-character summary cap.
+   unknown response fields; a 700-character summary cap; a `give`, `drop` or `take` with no
+   reply is resent with the same id until it gets one, so a lost reply can't put an item in two
+   hoards.

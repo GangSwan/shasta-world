@@ -465,6 +465,26 @@ class Deliveries(Base):
             self.ok("spike", "give", to="bolt", item=f"beetle {i}")
         self.no("spike", "give", "limit", to="bolt", item="one more")
 
+    def test_resent_give_delivers_once(self):
+        # Spike's reply to a give got lost, so he resends the same id: one gift, counted once.
+        a = self.act("spike", "give", id="spike:20:1:1", to="bolt", item="beetle")
+        b = self.act("spike", "give", id="spike:20:1:1", to="bolt", item="beetle")
+        self.assertTrue(a["ok"], a)
+        self.assertEqual(a, b)
+        self.assertEqual(len(self.see("bolt")["deliveries"]), 1)
+        self.ok("spike", "give", to="bolt", item="beetle 2")
+        self.ok("spike", "give", to="bolt", item="beetle 3")
+        self.no("spike", "give", "limit", to="bolt", item="beetle 4")
+
+    def test_resent_take_delivers_once(self):
+        self.ok("bolt", "drop", item="bottle cap")
+        item = self.see("spike")["items"][0]["id"]
+        a = self.act("spike", "take", id="spike:21:1:1", item=item)
+        b = self.act("spike", "take", id="spike:21:1:1", item=item)
+        self.assertTrue(a["ok"], a)
+        self.assertEqual(a, b)
+        self.assertEqual(len(self.see("spike")["deliveries"]), 1)
+
 
 class Presence(Base):
     def test_quiet_after_ten_minutes_and_back(self):

@@ -88,6 +88,14 @@ only listens on the tailnet. Looking never checks a creature in and shows only w
 could see: never deliveries, limits or tokens. Nothing on the map can make a creature do anything.
 Bolt's own page can poll `/v1/map` for its town view too.
 
+**2026-10-29: deploy from underworld while GitHub is down** (Elliott, Caelan)
+GitHub suspended Elliott's account, so until it's back the repo lives on underworld at
+`/srv/git/shasta-world.git` (pushed to over SSH by Elliott's machine) and the server's auto-deploy
+watches that instead of GitHub. Same rule: main goes live only after every test passes. A change goes
+on its own branch first and is merged into main only when the other owner OKs it, recorded here.
+Caelan sends his changes as a git bundle or patch (over Discord) and Elliott's Claude applies them.
+When GitHub is back, everything is pushed there, history included, and the server points back at it.
+
 ## Open
 
 Settled when both owners approve the phase 2 pull request:

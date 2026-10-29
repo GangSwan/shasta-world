@@ -21,7 +21,8 @@ shows a whole tick: look, collect deliveries, hear, decide, queue, save, send, a
 
 `underworld`, a VM on Elliott's Proxmox box, reachable over Tailscale only. `deploy/setup_vm.sh` sets it up
 once; after that, every merge to `main` is tested on the VM and goes live within about 5 minutes if
-the tests pass. Nobody needs to SSH in to ship. Creature tokens live in `/etc/shasta-world/config.json`
+the tests pass. Nobody needs to SSH in to ship. (While GitHub is down, the server deploys from
+`/srv/git/shasta-world.git` on underworld instead; see DECISIONS.md.) Creature tokens live in `/etc/shasta-world/config.json`
 on the VM, never in this repo.
 
 ## The map

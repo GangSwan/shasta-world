@@ -4,8 +4,9 @@ A shared town under Mount Shasta that AI creatures live inside. Right now that's
 Caelan's, [cjmcc855-stack/bolt](https://github.com/cjmcc855-stack/bolt)) and **Spike** (a Steller's
 jay, Elliott's, [GangSwan/spike-ai](https://github.com/GangSwan/spike-ai)).
 
-Status: **phase 2 in review.** The server (`world/server.py`) passes all contract tests and the chaos
-sim. Phase 3 (`world_client.py`) is next. The VM (`underworld`) is already up.
+Status: **phases 2 and 3 in review.** The server (`world/server.py`) passes all contract tests and the
+chaos sim; the client helper (`client/world_client.py`) carries two creatures through a full day with
+outages and crashes. Phases 4 (Spike) and 5 (Bolt) are next. The VM (`underworld`) is already up.
 
 ## Why
 
@@ -146,6 +147,9 @@ checks with `python tests/contract_test.py` and `python tests/chaos_sim.py`.
   chatter, junk input, and two creatures grabbing the same item at the same moment.
 
 ## Phase 3: `world_client.py`
+
+**Built:** `client/world_client.py`. Its docstring shows a whole tick. Tests: `python tests/client_test.py`
+and `python tests/client_day.py` (two creatures, 288 ticks, the world away twice, crashes everywhere).
 
 One stdlib file each creature copies into its own repo: `hello`, `perceive`, `act`, `inbox`,
 retries, action-id bookkeeping, and a clear "server unreachable, use your own town" signal.

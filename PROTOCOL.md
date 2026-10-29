@@ -166,7 +166,7 @@ Reply: `{"ok": true, "id": "...", "result": "<plain English>", ...}` or
   This is what makes resending safe (see "When to send").
 - **Same id, different body** → `409 id_reused`. Nothing happens.
 - Ids are remembered for **30 days**. `400`s are never remembered, so a fixed request can reuse its id.
-- **No answer means "unknown", not "no".** If a `give`, `drop` or `take` gets no reply (timeout,
+- **No answer means "unknown", not "no".** If a `give`, `drop`, `take` or `hide` gets no reply (timeout,
   dropped connection, 5xx), the world may or may not have done it. The creature keeps it in an
   outbox and resends **the same id and body** until it gets a reply, and only then acts on it (for
   `give`/`drop`, that's when the item leaves its hoard). Resending is always safe: a replay does
@@ -180,17 +180,19 @@ Reply: `{"ok": true, "id": "...", "result": "<plain English>", ...}` or
 **Save first, then send.** The ids only protect a creature that remembers them:
 
 1. The tick succeeds and decides its actions, each with a fresh id.
-2. The creature **saves** its state with its `give`, `drop` and `take` actions (id + body) in its
-   outbox. An item being given or dropped is marked "in flight" in the same save: it can't be
+2. The creature **saves** its state with its `give`, `drop`, `take` and `hide` actions (id + body)
+   in its outbox. An item being given or dropped is marked "in flight" in the same save: it can't be
    given, dropped or used again, and it isn't gone yet.
 3. It sends them. On each reply it applies the result (`ok`: the in-flight item is gone for good;
    `no`: it's back in the hoard), removes the entry from the outbox, and saves again.
 4. After a crash or restart, it resends whatever is still in the outbox, **same ids, same bodies**,
    before sending anything new.
 
-Only `give`, `drop` and `take` go in the outbox. Everything else (`go`, `say`, `sound`, `doing`,
-`hide`, `presence`, `human_spoke`) is sent once and forgotten if it gets no reply. Resent hours
-later, a `say` would finish a dead conversation and a `go` would undo the place `hello` just set.
+Only `give`, `drop`, `take` and `hide` go in the outbox: they move things, and arriving late does no
+harm (a `hide` is a human's `!leave`, often a gift; dropping it would lose it). Everything else
+(`go`, `say`, `sound`, `doing`, `presence`, `human_spoke`) is sent once and forgotten if it gets no
+reply. Resent hours later, a `say` would finish a dead conversation and a `go` would undo the place
+`hello` just set.
 
 A failed tick sends nothing and saves nothing. Sending before saving is not safe: a crash between
 the two loses the id, the retried tick decides again with a new id, and a `give` the world already

@@ -4,9 +4,10 @@ A shared town under Mount Shasta that AI creatures live inside. Right now that's
 Caelan's, [cjmcc855-stack/bolt](https://github.com/cjmcc855-stack/bolt)) and **Spike** (a Steller's
 jay, Elliott's, [GangSwan/spike-ai](https://github.com/GangSwan/spike-ai)).
 
-Status: **phases 2 and 3 in review.** The server (`world/server.py`) passes all contract tests and the
-chaos sim; the client helper (`client/world_client.py`) carries two creatures through a full day with
-outages and crashes. Phases 4 (Spike) and 5 (Bolt) are next. The VM (`underworld`) is already up.
+Status: **phases 1-3 done; phase 6 (hosting) in review.** The server (`world/server.py`) passes all
+contract tests and the chaos sim; the client helper (`client/world_client.py`) carries two creatures
+through a full day with outages and crashes; `deploy/` sets it up on `underworld` with auto-deploy
+from `main`. Phases 4 (Spike) and 5 (Bolt) are next.
 
 ## Why
 
@@ -166,6 +167,11 @@ Each creature gets a switch (`world_url` for Spike). Off means today's behavior,
 - **Bolt:** Caelan's call, along the same lines.
 
 ## Phase 6: hosting and deploys
+
+**Built:** `deploy/` (setup script, systemd units, auto-deploy). Tested on `underworld` without root:
+the full test suite on its Python, `systemd-analyze verify` on the units, and the auto-deploy against
+a local copy of the repo (no change, a good commit, a commit that breaks the tests, the same broken
+commit again, then a fix). SSH for Caelan is still for later (see `DECISIONS.md`).
 
 - `deploy/setup_vm.sh` sets up a fresh Ubuntu Server VM: the `shasta` user, the folder, the
   systemd service, log rotation, a backup timer, and the server listening on Tailscale only.

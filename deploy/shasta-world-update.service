@@ -1,0 +1,12 @@
+[Unit]
+Description=shasta-world auto-deploy: test main and switch to it if the tests pass
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shasta
+Group=shasta
+WorkingDirectory=/opt/shasta-world
+ExecStart=/bin/bash /opt/shasta-world/deploy/update.sh
+TimeoutStartSec=15min

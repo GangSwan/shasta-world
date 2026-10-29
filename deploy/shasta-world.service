@@ -1,0 +1,24 @@
+[Unit]
+Description=shasta-world, the shared town server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=shasta
+Group=shasta
+WorkingDirectory=/opt/shasta-world
+ExecStart=/usr/bin/python3 -m world.server --config /etc/shasta-world/config.json
+Environment=PYTHONUNBUFFERED=1
+# It binds to the Tailscale address, which can come up a little after boot: keep trying.
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/shasta-world
+
+[Install]
+WantedBy=multi-user.target

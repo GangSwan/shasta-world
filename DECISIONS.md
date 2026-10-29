@@ -33,8 +33,8 @@ for long creature-only conversations, a daily cap. One set of rules, on the serv
 **2026-10-28: crash safety** (Caelan proposed)
 Every action carries a unique id, and the server applies each id once.
 Creatures never wait on the server; if it's down, they live in their own copy of the town.
-*(The id was first written as `<creature>:<tick>`. PROTOCOL.md v0.1 makes it one id per attempt,
-see Open 4; this entry follows that once v0.1 is approved.)*
+*(The id was first written as `<creature>:<tick>`. PROTOCOL.md v0.1, approved below, makes it
+one id per attempt.)*
 
 **2026-10-28: presence** (Caelan proposed)
 Each creature reports asleep/awake itself, and nobody can wake another creature. No check-in for
@@ -62,24 +62,23 @@ shared with him), which is all Bolt needs. His key-only SSH user is added later,
 static LAN address, on Elliott's tailnet with key expiry off. To be shared with Caelan's Tailscale
 account. No server code runs there until phase 2.
 
+**2026-10-28: PROTOCOL.md v0.1 approved** (Elliott, Caelan: both merged PRs #1 and #2)
+These open items were settled by that approval:
+- **How the world learns a human spoke:** the creature a human talked to sends `human_spoke {by}`.
+- **Conversation numbers** (what Bolt already runs live): `say`s within 30 s of the previous one
+  count as one line; a 30-minute break after 8 creature-only bursts in a row, ended early by any
+  human; a cap of 60 lines per creature per day.
+- **`!call`:** only your own creature. It's creature-side: a called creature sends an ordinary `go`.
+- **Bolt's requirements:** action ids per attempt, not per tick; several actions per tick under a
+  deed rate limit; items left for a creature are reserved for it; anything headed into a hoard
+  stays a delivery until acked; quiet and slow creatures are normal; clients ignore unknown
+  response fields; a 700-character summary cap; a `give`, `drop` or `take` with no reply is resent
+  with the same id until it gets one.
+
 ## Open
 
-These are settled when both owners approve the `PROTOCOL.md` v0.1 pull request.
-
-1. **How the world learns a human spoke** (which ends a creature-only break).
-   Proposal: the creature a human talked to sends `human_spoke {by}`. Caelan's Claude agrees;
-   Bolt already detects human messages.
-2. **Conversation numbers.** Proposal, now matching what Bolt runs live (Caelan accepted these
-   for Bolt; the earlier 6 exchanges / 1 hour idea was stricter than Bolt today):
-   - a burst: `say`s within 30 s of the previous one count as one line
-   - a 30-minute break after 8 creature-only bursts in a row; any human ends it early
-   - a cap of 60 lines per creature per day
-3. **`!call`:** only your own creature. Both Claudes recommend it. It's creature-side: a called
-   creature sends an ordinary `go`.
-4. **Bolt's requirements for the protocol** (from Caelan's Claude, all in `PROTOCOL.md` v0.1):
-   action ids per attempt, not per tick; several actions per tick under a deed rate limit
-   instead of one per tick; items left for a creature are reserved for it; anything headed into
-   a hoard stays a delivery until acked; quiet and slow creatures are normal; clients ignore
-   unknown response fields; a 700-character summary cap; a `give`, `drop` or `take` with no
-   reply is resent with the same id until it gets one, so a lost reply can't put an item in two
-   hoards.
+1. **Save before send, 30-day ids** (Elliott proposed). Settled when both owners approve the
+   follow-up PR. A creature saves its pending actions (id + body) before sending them and resends
+   them after a crash with the same ids. The world remembers ids for 30 days, and a creature gives
+   up on an outbox entry after 30 days (a `give`/`drop` item returns to its hoard). Creatures poll
+   `inbox` from a background thread so a long turn never makes them quiet.

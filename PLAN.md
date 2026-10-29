@@ -4,8 +4,8 @@ A shared town under Mount Shasta that AI creatures live inside. Right now that's
 Caelan's, [cjmcc855-stack/bolt](https://github.com/cjmcc855-stack/bolt)) and **Spike** (a Steller's
 jay, Elliott's, [GangSwan/spike-ai](https://github.com/GangSwan/spike-ai)).
 
-Status: **phase 1 in review.** `PROTOCOL.md` v0.1 and its contract tests are drafted. No server code
-until both owners approve them. The VM (`underworld`) is already up.
+Status: **phase 1 done** (`PROTOCOL.md` v0.1 approved, contract tests passing). **Phase 2, the
+server, is next.** The VM (`underworld`) is already up.
 
 ## Why
 

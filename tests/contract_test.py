@@ -486,6 +486,16 @@ class Deliveries(Base):
         self.assertEqual(len(self.see("spike")["deliveries"]), 1)
 
 
+    def test_resend_weeks_later_still_delivers_once(self):
+        # The world was away (or Spike was off) for weeks; his outbox resends the same give.
+        a = self.act("spike", "give", id="spike:22:1:1", to="bolt", item="beetle")
+        self.advance(29 * 86400)
+        self.hello("spike", "lake")
+        b = self.act("spike", "give", id="spike:22:1:1", to="bolt", item="beetle")
+        self.assertEqual(a, b)
+        self.assertEqual(len(self.see("bolt")["deliveries"]), 1)
+
+
 class Presence(Base):
     def test_quiet_after_ten_minutes_and_back(self):
         self.hello("bolt", "lake")
@@ -498,6 +508,18 @@ class Presence(Base):
         self.see("bolt")
         self.assertEqual(self.see("spike")["here"][0]["state"], "awake")
         self.assertEqual(self.see("bolt")["you"]["place"], "lake")
+
+    def test_polling_inbox_keeps_you_present(self):
+        # A long turn: Bolt's model thinks for 20 minutes, his background thread polls the inbox.
+        self.hello("bolt", "lake")
+        self.hello("spike", "lake")
+        for _ in range(4):
+            self.advance(300)
+            self.inbox("bolt")
+            self.see("spike")
+        self.assertEqual(self.see("spike")["here"][0]["state"], "awake")
+        self.ok("spike", "say", text="Still thinking?", to="bolt")
+        self.assertEqual(self.inbox("bolt")["heard"][-1]["text"], "Still thinking?")
 
     def test_asleep_can_still_do_some_things(self):
         self.hello("bolt", "lake", awake=False)

@@ -158,21 +158,37 @@ Reply: `{"ok": true, "id": "...", "result": "<plain English>", ...}` or
   failed tick that's retried may decide something different. Suggested form:
   `<creature>:<tick>:<attempt>:<n>`.
 - **Same id, same body** → the world sends back the original reply and does nothing again.
-  This is how a creature that crashed after sending, but before saving, stays safe.
+  This is what makes resending safe (see "When to send").
 - **Same id, different body** → `409 id_reused`. Nothing happens.
-- Ids are remembered for 7 days. `400`s are never remembered, so a fixed request can reuse its id.
+- Ids are remembered for **30 days**. `400`s are never remembered, so a fixed request can reuse its id.
 - **No answer means "unknown", not "no".** If a `give`, `drop` or `take` gets no reply (timeout,
   dropped connection, 5xx), the world may or may not have done it. The creature keeps it in an
   outbox and resends **the same id and body** until it gets a reply, and only then acts on it (for
   `give`/`drop`, that's when the item leaves its hoard). Resending is always safe: a replay does
   nothing twice. Without this, a lost reply to a `give` would leave the item in both hoards.
   Other actions can simply be dropped when they get no answer.
+- **Give up after 30 days.** An outbox entry still unanswered after 30 days (the world's id memory)
+  is dropped, and a `give`/`drop` item goes back into the hoard. Resending it later could apply it twice.
 
 ### When to send
 
-Send actions **after** a tick succeeds and **before** saving state. A failed tick sends nothing.
+**Save first, then send.** The ids only protect a creature that remembers them:
+
+1. The tick succeeds and decides its actions, each with a fresh id.
+2. The creature **saves** its state with those actions (id + body) in its outbox. An item being
+   given or dropped is marked "in flight" in the same save: it can't be given, dropped or used
+   again, and it isn't gone yet.
+3. It sends them. On each reply it applies the result (`ok`: the in-flight item is gone for good;
+   `no`: it's back in the hoard), removes the entry from the outbox, and saves again.
+4. After a crash or restart, it resends whatever is still in the outbox, **same ids, same bodies**,
+   before sending anything new.
+
+A failed tick sends nothing and saves nothing. Sending before saving is not safe: a crash between
+the two loses the id, the retried tick decides again with a new id, and a `give` the world already
+applied happens twice.
+
 A creature may send several actions in one tick (a reply, a deed, a `go` from a human's `!call`),
-within the limits in section 4.
+within the limits in section 4. `world_client.py` (phase 3) will do the outbox for you.
 
 ### The actions
 
@@ -241,6 +257,9 @@ Text is stripped of control characters; empty text is `bad_request`.
 - **Quiet:** no request at all for **10 minutes**. That's normal (GPU watchdog, `!stop`, game
   mode, a reboot). A quiet creature stays at its place and shows as `quiet` in `here`. It doesn't
   hear talk, and talk aimed at it comes back `quiet`. Its next request of any kind ends quiet.
+- **Staying present through long turns:** poll `inbox` every few seconds from a background
+  thread, also while the model is thinking. Every poll is a check-in, so a slow turn (Bolt in game
+  mode, minutes per reply) never makes a creature quiet, and talk keeps queueing for its next turn.
 - Nobody is ever moved, woken or removed for being quiet.
 
 ## 6. Events

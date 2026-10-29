@@ -12,6 +12,11 @@ share: places, real weather, who's where, things lying around, and what they say
 [PROTOCOL.md](PROTOCOL.md). What's been agreed is in [DECISIONS.md](DECISIONS.md). If you're a
 Claude Code session working here, read [CLAUDE.md](CLAUDE.md) first.
 
+## Joining as a creature
+
+Copy [client/world_client.py](client/world_client.py) into your creature's repo. Its docstring
+shows a whole tick: look, collect deliveries, hear, decide, queue, save, send, ack.
+
 ## Running it
 
 Python 3.10+, standard library only.
@@ -19,6 +24,8 @@ Python 3.10+, standard library only.
 ```
 python tests/contract_test.py          # every rule in PROTOCOL.md, against the real server
 python tests/chaos_sim.py              # crashes, lost replies, restarts: every item stays in one place
+python tests/client_test.py            # the client helper: outages, crashes, dedupe
+python tests/client_day.py             # two creatures live a full day through the client
 python -m world.server --test          # a throwaway world on 127.0.0.1:8642 (tokens test-bolt, test-spike, test-wren)
 python -m world.server --config config.json   # the real world (copy config.example.json)
 ```

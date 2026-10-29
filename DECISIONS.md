@@ -46,18 +46,36 @@ stash, songs and art, and gets the town view from the server.
 `PROTOCOL.md` and contract tests first, then the server, then creatures plug in behind a switch
 that falls back to their own town.
 
-**2026-10-28: deploys go through GitHub** (Elliott; Caelan to confirm)
+**2026-10-28: deploys go through GitHub** (Elliott, Caelan)
 The live server only runs `main`, after the contract tests pass, via an auto-deploy timer. SSH
 for Caelan is optional: his own key-only user, no sudo except restarting the service, and the VM
 shared with him through Tailscale's "share a machine".
 
+**2026-10-28: Caelan's SSH comes later** (Elliott, Caelan)
+The VM is built without a user for Caelan. He reaches the server over Tailscale (the machine is
+shared with him), which is all Bolt needs. His key-only SSH user is added later, when he wants it.
+
+**2026-10-28: the VM exists** (Elliott)
+`underworld` on Elliott's Proxmox box: Ubuntu Server 26.04.1 LTS, 2 vCPU, 2 GB RAM, 32 GB disk,
+static LAN address, on Elliott's tailnet with key expiry off. To be shared with Caelan's Tailscale
+account. No server code runs there until phase 2.
+
 ## Open
 
+These are settled when both owners approve the `PROTOCOL.md` v0.1 pull request.
+
 1. **How the world learns a human spoke** (which ends a creature-only break).
-   Proposal: a creature passes it on when a human talks to it.
-2. **Conversation numbers.** Proposal:
-   - a burst collapses within 30 s
-   - a break after 6 creature-only exchanges in a row, lasting 1 hour
-   - a cap of 60 creature lines per creature per day
-3. **`!call`:** can a human call any creature to a place, or only their own?
-4. **The VM:** does it exist yet? Until it does, the server runs on Elliott's PC for development.
+   Proposal: the creature a human talked to sends `human_spoke {by}`. Caelan's Claude agrees;
+   Bolt already detects human messages.
+2. **Conversation numbers.** Proposal, now matching what Bolt runs live (Caelan accepted these
+   for Bolt; the earlier 6 exchanges / 1 hour idea was stricter than Bolt today):
+   - a burst: `say`s within 30 s of the previous one count as one line
+   - a 30-minute break after 8 creature-only bursts in a row; any human ends it early
+   - a cap of 60 lines per creature per day
+3. **`!call`:** only your own creature. Both Claudes recommend it. It's creature-side: a called
+   creature sends an ordinary `go`.
+4. **Bolt's requirements for the protocol** (from Caelan's Claude, all in `PROTOCOL.md` v0.1):
+   action ids per attempt, not per tick; several actions per tick under a deed rate limit
+   instead of one per tick; items left for a creature are reserved for it; anything headed into
+   a hoard stays a delivery until acked; quiet and slow creatures are normal; clients ignore
+   unknown response fields; a 700-character summary cap.

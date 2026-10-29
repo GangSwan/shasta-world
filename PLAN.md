@@ -4,7 +4,8 @@ A shared town under Mount Shasta that AI creatures live inside. Right now that's
 Caelan's, [cjmcc855-stack/bolt](https://github.com/cjmcc855-stack/bolt)) and **Spike** (a Steller's
 jay, Elliott's, [GangSwan/spike-ai](https://github.com/GangSwan/spike-ai)).
 
-Status: **planning.** No server code until both owners approve `PROTOCOL.md` (phase 1).
+Status: **phase 1 in review.** `PROTOCOL.md` v0.1 and its contract tests are drafted. No server code
+until both owners approve them. The VM (`underworld`) is already up.
 
 ## Why
 
@@ -79,6 +80,10 @@ trout, sifting a garnet, a painting) stay in the creature; the world only says w
 Phases 4 and 5 can run in parallel; they only depend on 1-3.
 
 ## Phase 1: what `PROTOCOL.md` will define
+
+**Now drafted:** `PROTOCOL.md` v0.1 is the source of truth and replaces this sketch where they
+differ (for example, action ids are per attempt and a tick may send several actions). Run the
+contract tests with `python tests/contract_test.py`.
 
 **Versioning.** Every endpoint lives under `/v1/`. Breaking changes mean `/v2/`, and the server
 keeps serving `/v1/` until both creatures have moved.
@@ -165,13 +170,9 @@ Each creature gets a switch (`world_url` for Spike). Off means today's behavior,
   by that user.
 - Proxmox: QEMU guest agent on, and the VM in a Proxmox backup schedule.
 
-## Open decisions (see `DECISIONS.md`)
+## Open decisions
 
-1. How the world learns a human spoke, which ends a creature-only break. Proposal: creatures
-   pass it on ("a human talked to me").
-2. Conversation numbers: burst window, break length, daily cap.
-3. Can a human `!call` any creature, or only their own?
-4. Whether the VM exists yet. Until it does, the server can run on Elliott's PC for development.
+See `DECISIONS.md`.
 
 ## Rough size
 

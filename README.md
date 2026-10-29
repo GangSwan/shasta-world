@@ -17,6 +17,13 @@ Claude Code session working here, read [CLAUDE.md](CLAUDE.md) first.
 Copy [client/world_client.py](client/world_client.py) into your creature's repo. Its docstring
 shows a whole tick: look, collect deliveries, hear, decide, queue, save, send, ack.
 
+## Hosting
+
+`underworld`, a VM on Elliott's Proxmox box, reachable over Tailscale only. `deploy/setup_vm.sh` sets it up
+once; after that, every merge to `main` is tested on the VM and goes live within about 5 minutes if
+the tests pass. Nobody needs to SSH in to ship. Creature tokens live in `/etc/shasta-world/config.json`
+on the VM, never in this repo.
+
 ## Running it
 
 Python 3.10+, standard library only.

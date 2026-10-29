@@ -20,7 +20,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 git archive "$NEW" | tar -x -C "$TMP"
 
-if (cd "$TMP" && python3 tests/contract_test.py && python3 tests/client_test.py \
+if (cd "$TMP" && python3 tests/contract_test.py && python3 tests/client_test.py && python3 tests/map_test.py \
       && python3 tests/chaos_sim.py 1000 1); then
   git -c advice.detachedHead=false checkout -q --detach "$NEW"
   rm -f "$STATE"

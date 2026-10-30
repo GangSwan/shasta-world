@@ -17,6 +17,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "client"))
 from world.server import TEST_ROSTER, Server, World  # noqa: E402
 from world_client import WorldClient  # noqa: E402
+sys.path.insert(0, str(ROOT / "tests"))
+from contract_test import png  # noqa: E402
 
 
 def free_port():
@@ -183,6 +185,51 @@ class Outbox(Base):
     def test_unknown_action(self):
         with self.assertRaises(ValueError):
             self.client("spike").queue({}, "fly_to_moon")
+
+
+class Graffiti(Base):
+    def picture(self, rgb=(200, 60, 40)):
+        f = Path(self.tmp.name) / f"piece-{rgb[0]}.png"
+        f.write_bytes(png(rgb=rgb))
+        return f
+
+    def test_tag_then_a_piece_goes_up(self):
+        wc, ws = self.client("spike"), {}
+        wc.look(ws, "rail_yard", True)
+        wc.queue(ws, "tag", surface="water_tower", kind="mural")
+        [(_, r)] = wc.send(ws)
+        self.assertTrue(r["ok"], r)
+        mid = wc.queue_mark(ws, self.picture(), "rail_yard", "water_tower", "mural", title="Ring Day")
+        [(body, r)] = wc.send(ws)
+        self.assertEqual((body["action"], r["ok"], r["mark"]), ("mark", True, mid))
+        self.assertEqual(wc.look(ws, "rail_yard", True)["walls"][0]["title"], "Ring Day")
+
+    def test_painted_while_away_goes_up_once_after_a_crash(self):
+        wc, ws = self.client("spike"), {}
+        wc.look(ws, "fir", True)
+        self.down()
+        wc.queue_mark(ws, self.picture(), "junkyard", "gate", "tag")
+        self.assertEqual(wc.send(ws), [])
+        self.up()
+        saved = copy.deepcopy(ws)
+        wc.look(ws, "fir", True)
+        [(_, first)] = wc.send(ws)                    # it lands; we crash before saving
+        wc2 = self.client("spike")
+        wc2.look(saved, "fir", True)
+        [(_, again)] = wc2.send(saved)
+        self.assertEqual(first, again)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/marks?place=junkyard")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            gate = next(w for w in json.loads(r.read())["walls"] if w["surface"] == "gate")
+        self.assertEqual(len(gate["pieces"]), 1)
+
+    def test_a_lost_picture_is_dropped_not_retried(self):
+        wc, ws = self.client("spike"), {}
+        wc.look(ws, "fir", True)
+        wc.queue_mark(ws, Path(self.tmp.name) / "gone.png", "junkyard", "gate", "tag")
+        [(_, r)] = wc.send(ws)
+        self.assertEqual(r["reason"], "no_file")
+        self.assertEqual(ws["outbox"], [])
 
 
 class Deliveries(Base):

@@ -101,6 +101,14 @@ When GitHub is back, everything is pushed there, history included, and the serve
 "Around town:" line, so Spike and Bolt can go find each other on purpose instead of meeting by
 chance. Unknown fields are ignored, so it changes nothing for a creature that doesn't use it.
 
+**2026-10-30: graffiti, protocol v0.2** (Elliott proposed in `GRAFFITI.md`, Caelan OK'd it as written)
+Creatures can paint the town's walls: `tag` to start, `PUT /v1/marks/<id>` to put a picture up, `walls`
+in `perceive` and one summary line, and the map shows the art when a place is tapped. Caelan's answers,
+all as proposed: v0.2 is fine (additive, nothing changes for Bolt); **nobody paints over another
+creature's piece**; **no walls at Bolt's nest**; the "On the walls" summary line is fine; **4 pieces a
+day** per creature. The map only ever shows two notices: someone tagging now, and one badge per place
+with a new piece you haven't looked at.
+
 ## Open
 
 Settled when both owners approve the phase 2 pull request:

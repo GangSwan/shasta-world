@@ -1,4 +1,4 @@
-"""Contract tests: every rule in PROTOCOL.md v0.1, checked over real HTTP.
+"""Contract tests: every rule in PROTOCOL.md v0.2, checked over real HTTP.
 
     python tests/contract_test.py                 # against the real server (world/server.py), in-process
     WORLD_IMPL=fake python tests/contract_test.py # against the in-memory fake world
@@ -13,7 +13,10 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import struct
+import zlib
 from pathlib import Path
+from urllib.parse import urlencode
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -43,20 +46,36 @@ def tearDownModule():
         STOP()
 
 
-def call(method, path, body=None, who=None, token=None, raw=None):
+def call(method, path, body=None, who=None, token=None, raw=None, ctype="application/json"):
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
     req = urllib.request.Request(URL.rstrip("/") + path, data=data, method=method)
     tok = token if token is not None else TOKENS.get(who)
     if tok:
         req.add_header("Authorization", f"Bearer {tok}")
     if data is not None:
-        req.add_header("Content-Type", "application/json")
+        req.add_header("Content-Type", ctype)
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:
         text = e.read()
         return e.code, json.loads(text) if text else {}
+
+
+def png(w=400, h=300, rgb=(200, 60, 40)):
+    """A real PNG of one color (tiny once compressed)."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def jpeg_header(w, h):
+    """Just enough of a JPEG for the size check: SOI, an APP0 segment, then SOF0 with the size."""
+    app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00" + b"\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    sof = b"\xff\xc0" + struct.pack(">HBHHB", 11, 8, h, w, 1) + b"\x01\x11\x00"
+    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
 
 
 class Base(unittest.TestCase):
@@ -619,6 +638,180 @@ class Seeing(Base):
         self.assertIn(r["season"], ("winter", "spring", "summer", "fall"))
         self.assertTrue(r["now"][-6:] in ("-07:00", "-08:00"), r["now"])
         self.assertEqual(set(r["weather"]), {"kind", "temp_f", "wind_mph"})
+
+
+class Graffiti(Base):
+    def put(self, who, mid, data=None, expect=200, ctype="image/png", **q):
+        s, r = call("PUT", f"/v1/marks/{mid}?{urlencode(q)}", who=who, raw=png() if data is None else data, ctype=ctype)
+        self.assertEqual(s, expect, r)
+        return r
+
+    def piece(self, who, mid, place, surface, kind="tag", data=None, **q):
+        r = self.put(who, mid, data, place=place, surface=surface, kind=kind, **q)
+        self.assertTrue(r["ok"], r)
+        return r
+
+    def test_walls_are_in_town(self):
+        s, r = call("GET", "/v1/town", who="spike")
+        walls = r["surfaces"]
+        self.assertIn({"id": "water_tower", "name": "the water tower"}, walls["rail_yard"])
+        self.assertNotIn("summit", walls)
+        self.assertNotIn("nest", walls)
+
+    def test_tag_rules(self):
+        self.hello("spike", "lake")
+        self.no("spike", "tag", "unknown_surface", surface="water_tower", kind="tag")   # that's at the rail yard
+        self.no("spike", "tag", "not_yours", surface="boathouse", kind="tag")          # the lake is Wren's home
+        self.hello("bolt", "fir")
+        self.no("bolt", "tag", "not_yours", surface="fence", kind="tag")
+        self.hello("spike", "fir")
+        self.ok("spike", "tag", surface="fence", kind="throwup")
+        self.act("spike", "tag", expect=400, surface="fence", kind="sticker")
+        self.act("spike", "tag", expect=400, surface="fence")
+        self.hello("spike", "rail_yard", awake=False)
+        self.no("spike", "tag", "asleep", surface="water_tower", kind="tag")
+
+    def test_tagging_shows_then_ends_with_one_event(self):
+        self.hello("bolt", "rail_yard")
+        self.hello("spike", "rail_yard")
+        before = self.see("bolt")["recent"]
+        r = self.ok("spike", "tag", surface="water_tower", kind="mural")
+        self.assertTrue(r["until"])
+        seen = self.see("bolt")
+        self.assertEqual(seen["here"][0]["doing"], "painting the water tower")
+        self.assertEqual(seen["recent"], before, "starting a piece adds no event")
+        r = self.piece("spike", "m1", "rail_yard", "water_tower", kind="mural", title="Ring Day")
+        self.assertEqual(r["mark"], "m1")
+        seen = self.see("bolt")
+        self.assertIsNone(seen["here"][0]["doing"])
+        self.assertEqual(seen["recent"][-1], "Spike painted something new on the water tower.")
+        self.assertEqual(sum("painted" in e for e in seen["recent"]), 1)
+
+    def test_tagging_ends_on_go_sleep_and_time(self):
+        self.hello("bolt", "rail_yard")
+        self.hello("spike", "rail_yard")
+        self.ok("spike", "tag", surface="boxcar", kind="tag")
+        self.ok("spike", "go", to="junkyard")
+        self.ok("spike", "go", to="rail_yard")
+        self.assertIsNone(self.see("bolt")["here"][0]["doing"])
+        self.ok("spike", "tag", surface="boxcar", kind="tag")
+        self.ok("spike", "presence", awake=False)
+        self.assertIsNone(self.see("bolt")["here"][0]["doing"])
+        self.ok("spike", "presence", awake=True)
+        self.ok("spike", "tag", surface="boxcar", kind="tag")
+        self.advance(1801)
+        self.see("spike")
+        self.assertIsNone(self.see("bolt")["here"][0]["doing"])
+
+    def test_pictures_are_checked_by_their_bytes(self):
+        fake = b"\x89PNG\r\n\x1a\n" + b"not really a picture" * 10
+        for i, data in enumerate((b"hello", fake, b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', png(32, 32),
+                                  png(2000, 64), jpeg_header(64, 4000))):
+            r = self.put("spike", f"bad{i}", data, place="rail_yard", surface="boxcar", kind="tag")
+            self.assertEqual(r["reason"], "bad_image", r)
+        self.piece("spike", "j1", "rail_yard", "boxcar", data=jpeg_header(400, 300))
+        self.piece("spike", "p1", "rail_yard", "signal_shed", data=png(1024, 64))
+
+    def test_bad_requests(self):
+        self.put("spike", "x1", expect=400, place="rail_yard", surface="boxcar")                   # no kind
+        self.put("spike", "x2", expect=400, place="rail_yard", surface="boxcar", kind="sticker")
+        self.put("spike", "x3", expect=400, place="rail_yard", surface="boxcar", kind="tag", title="t" * 41)
+        self.put("spike", "x4", expect=400, place="rail_yard", surface="boxcar", kind="tag", color="red")
+        self.put("spike", "x5", data=b"", expect=400, place="rail_yard", surface="boxcar", kind="tag")
+        s, r = call("PUT", "/v1/marks/x6?place=rail_yard&surface=boxcar&kind=tag", raw=png())
+        self.assertEqual(s, 401)
+        s, r = call("PUT", "/v1/marks/" + "x" * 65 + "?place=rail_yard&surface=boxcar&kind=tag", who="spike", raw=png())
+        self.assertEqual(s, 404)
+        r = self.put("spike", "x7", place="rail_yard", surface="moon", kind="tag")
+        self.assertEqual(r["reason"], "unknown_surface")
+
+    def test_too_big(self):
+        try:
+            s, r = call("PUT", "/v1/marks/big?place=rail_yard&surface=boxcar&kind=tag", who="spike",
+                        raw=b"\x89PNG" + b"x" * (256 * 1024 + 10), ctype="image/png")
+        except (ConnectionError, urllib.error.URLError):
+            return          # the server may hang up before the whole body is sent; that's a refusal too
+        self.assertEqual((s, r["reason"]), (413, "too_big"))
+
+    def test_resent_upload_lands_once(self):
+        a = self.piece("spike", "m7", "junkyard", "gate", title="Hi")
+        b = self.piece("spike", "m7", "junkyard", "gate", title="Hi")
+        self.assertEqual(a, b)
+        s, r = call("GET", "/v1/marks?place=junkyard")
+        gate = next(w for w in r["walls"] if w["surface"] == "gate")
+        self.assertEqual(len(gate["pieces"]), 1)
+        r = self.put("spike", "m7", png(rgb=(1, 2, 3)), expect=409, place="junkyard", surface="gate", kind="tag", title="Hi")
+        self.assertEqual(r["reason"], "id_reused")
+        self.put("spike", "m7", expect=409, place="junkyard", surface="gate", kind="tag", title="Bye")
+
+    def test_works_from_anywhere_and_asleep(self):
+        self.hello("spike", "fir", awake=False)
+        self.piece("spike", "m1", "rail_yard", "water_tower")
+        self.hello("bolt", "rail_yard")
+        self.assertEqual(self.see("bolt")["walls"][0]["mark"], "m1")
+
+    def test_nobody_paints_over_someone_elses_piece(self):
+        self.piece("spike", "s1", "garage", "roll_door")
+        self.hello("bolt", "garage")
+        self.no("bolt", "tag", "not_yours", surface="roll_door", kind="tag")
+        r = self.put("bolt", "b1", place="garage", surface="roll_door", kind="tag")
+        self.assertEqual(r["reason"], "not_yours")
+        self.piece("bolt", "b2", "garage", "back_wall")
+        r = self.put("spike", "s2", place="garage", surface="back_wall", kind="tag", over="b2")
+        self.assertEqual(r["reason"], "not_yours")
+        r = self.put("spike", "s3", place="garage", surface="back_wall", kind="tag")
+        self.assertEqual(r["reason"], "not_yours")
+        r = self.put("spike", "s4", place="garage", surface="roll_door", kind="mural", over="b2")
+        self.assertEqual(r["reason"], "not_yours", "over has to be your own piece on the same wall")
+        self.piece("spike", "s5", "garage", "roll_door", kind="mural", over="s1", title="Bigger")
+
+    def test_four_pieces_a_day(self):
+        for i in range(4):
+            self.piece("spike", f"d{i}", "shed", "door" if i % 2 else "side")
+        self.piece("spike", "d3", "shed", "door")                       # a replay isn't a new piece
+        r = self.put("spike", "d4", place="shed", surface="door", kind="tag")
+        self.assertEqual(r["reason"], "limit")
+        self.advance(86400)
+        self.piece("spike", "d5", "shed", "door")
+
+    def test_each_wall_keeps_five_pictures(self):
+        prev = None
+        for i in range(7):
+            if i == 4:
+                self.advance(86400)
+            self.piece("spike", f"k{i}", "old_barn", "silo", data=png(rgb=(i, 0, 0)), **({"over": prev} if prev else {}))
+            prev = f"k{i}"
+        s, r = call("GET", "/v1/marks?place=old_barn")
+        silo = next(w for w in r["walls"] if w["surface"] == "silo")
+        self.assertEqual([p["id"] for p in silo["pieces"]], [f"k{i}" for i in range(6, -1, -1)])
+        self.assertEqual([p["img"] is not None for p in silo["pieces"]], [True] * 5 + [False] * 2)
+        self.assertEqual(silo["pieces"][0]["over"], "k5")
+        barn_door = next(w for w in r["walls"] if w["surface"] == "barn_door")
+        self.assertEqual(barn_door["pieces"], [])
+        self.assertEqual(call("GET", "/v1/marks?place=mars")[0], 400)
+
+    def test_walls_in_perceive_and_summary(self):
+        self.hello("bolt", "rail_yard")
+        self.assertEqual(self.see("bolt")["walls"], [])
+        self.assertNotIn("On the walls", self.see("bolt")["summary"])
+        self.piece("spike", "w1", "rail_yard", "water_tower", kind="mural", title="Ring Day")
+        self.advance(7200)
+        self.piece("spike", "w2", "rail_yard", "boxcar")
+        seen = self.see("bolt")
+        self.assertEqual([(w["surface"], w["by"], w["by_name"]) for w in seen["walls"]],
+                         [("water_tower", "spike", "Spike"), ("boxcar", "spike", "Spike")])
+        self.assertEqual(seen["walls"][0]["title"], "Ring Day")
+        self.assertIn("On the walls: Spike's tag on the old boxcar (just now), and 1 more.", seen["summary"])
+        self.hello("spike", "rail_yard")
+        self.hello("wren", "rail_yard")
+        for who in ("spike", "wren"):
+            self.ok(who, "doing", text="x" * 60)
+        for i in range(10):
+            self.ok("bolt", "hide", place="rail_yard", item=("a very long item name " * 3)[:60], by="Caelan")
+        r = self.see("bolt")
+        self.assertLessEqual(len(r["summary"]), 700)
+        self.assertLessEqual(len(r["summary"].splitlines()), 8)
+        self.assertIn("On the walls", r["summary"])
 
 
 if __name__ == "__main__":

@@ -11,8 +11,11 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from contract_test import png  # noqa: E402
 from world.server import TEST_ROSTER, Server, World  # noqa: E402
 
 SERVER = URL = None
@@ -139,6 +142,66 @@ class Map(unittest.TestCase):
         self.assertEqual(len(m["talk"]), 12)
         self.assertEqual(m["talk"][0]["text"], "line 19", "newest first")
         self.assertLessEqual(len(m["events"]), 30)
+
+
+class Walls(Map):
+    def put(self, who, mid, data, **q):
+        req = urllib.request.Request(f"{URL}/v1/marks/{mid}?{urlencode(q)}", data=data, method="PUT")
+        req.add_header("Authorization", f"Bearer test-{who}")
+        req.add_header("Content-Type", "image/png")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            out = json.loads(r.read())
+        self.assertTrue(out["ok"], out)
+        return out
+
+    def test_tagging_now_shows_on_the_map(self):
+        self.hello("spike", "rail_yard")
+        m, _ = town()
+        self.assertIsNone(m["creatures"][1]["tagging"])
+        self.act("spike", "tag", surface="water_tower", kind="mural")
+        m, _ = town()
+        spike = next(c for c in m["creatures"] if c["id"] == "spike")
+        self.assertEqual(spike["tagging"], {"place": "rail_yard", "surface": "water_tower", "name": "the water tower"})
+        self.put("spike", "m1", png(), place="rail_yard", surface="water_tower", kind="mural", title="Ring Day")
+        m, _ = town()
+        self.assertIsNone(next(c for c in m["creatures"] if c["id"] == "spike")["tagging"])
+
+    def test_only_the_top_piece_per_wall(self):
+        self.put("spike", "a", png(rgb=(1, 1, 1)), place="junkyard", surface="gate", kind="tag")
+        self.put("spike", "b", png(rgb=(2, 2, 2)), place="junkyard", surface="gate", kind="throwup", over="a", title="Two")
+        m, _ = town()
+        self.assertEqual([(x["id"], x["place"], x["surface"]) for x in m["marks"]],
+                         [("b", "junkyard", "gate")])
+        mk = m["marks"][0]
+        self.assertEqual((mk["by"], mk["title"], mk["surface_name"], mk["kind"]), ("Spike", "Two", "the junkyard gate", "throwup"))
+
+    def test_pictures_are_served_safely(self):
+        data = png(rgb=(9, 9, 9))
+        self.put("spike", "p", data, place="shed", surface="door", kind="tag")
+        img = town()[0]["marks"][0]["img"]
+        req = urllib.request.Request(URL + img)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            self.assertEqual(r.read(), data)
+            self.assertEqual(r.headers["Content-Type"], "image/png")
+            self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
+            self.assertIn("immutable", r.headers["Cache-Control"])
+        for path in ("/marks/" + "0" * 64 + ".png", "/marks/../world.db", "/marks/%2e%2e/x.png", img[:-3] + "svg"):
+            self.assertEqual(call("GET", path)[0], 404, path)
+
+    def test_painted_over_pictures_are_deleted_after_five(self):
+        imgs, prev = [], None
+        for i in range(6):
+            if i == 4:
+                call("POST", "/v1/_test", {"advance": 86400})
+            self.put("spike", f"k{i}", png(rgb=(i, 50, 50)), place="old_barn", surface="silo", kind="tag",
+                     **({"over": prev} if prev else {}))
+            prev = f"k{i}"
+            imgs.append(town()[0]["marks"][0]["img"])
+        self.assertEqual(call("GET", imgs[0])[0], 404, "the oldest picture is gone")
+        self.assertEqual(call("GET", imgs[1])[0], 200)
+        s, _, raw = call("GET", "/v1/marks?place=old_barn")
+        silo = next(w for w in json.loads(raw)["walls"] if w["surface"] == "silo")
+        self.assertIsNone(silo["pieces"][-1]["img"])
 
 
 if __name__ == "__main__":

@@ -11,7 +11,8 @@ floods, junk input, and two birds grabbing the same item at once.
 At the end every bird drains its outbox and deliveries, and the sim checks:
 - every item (starting hoards, plus everything humans hid) is in exactly one place;
 - the server never answered 5xx, and junk always got a 4xx;
-- a resent action id always got the same reply as the first time.
+- a resent action id always got the same reply as the first time;
+- every piece of graffiti the world said yes to is on its wall exactly once, with its picture kept.
 """
 import copy
 import json
@@ -25,6 +26,9 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from contract_test import png  # noqa: E402
+from world.graffiti import SURFACES  # noqa: E402
 from world.server import TEST_ROSTER, Server, World  # noqa: E402
 from world.town import PLACES  # noqa: E402
 
@@ -38,9 +42,10 @@ class Sim:
         self.db = str(Path(self.tmp.name) / "world.db")
         self.server = None
         self.stats = dict(restarts=0, crashes=0, lost_replies=0, never_sent=0, resends=0, junk=0, races=0,
-                          vanished=0, duplicates=0, gifts=0, takes=0, drops=0, hides=0, says=0, statuses={})
+                          vanished=0, duplicates=0, gifts=0, takes=0, drops=0, hides=0, says=0, pieces=0, statuses={})
         self.replies = {}           # (bird, id) -> first reply seen
         self.universe = set()       # every item name that exists somewhere
+        self.marked = set()         # (bird, mark id) the world said yes to
         self.hidden = 0
         self.start()
 
@@ -111,6 +116,10 @@ class Sim:
             ("POST", "/v1/ack", {"deliveries": [{"id": "d1"}]}, None),
             ("GET", "/v1/inbox?after=lots", None, None),
             ("GET", "/../../etc/passwd", None, None),
+            ("PUT", "/v1/marks/x:9?place=junkyard&surface=gate&kind=tag", None, b"<svg onload=alert(1)>"),
+            ("PUT", "/v1/marks/x:9?place=junkyard&surface=gate", None, png()),
+            ("PUT", "/v1/marks/../../etc?place=junkyard&surface=gate&kind=tag", None, png()),
+            ("GET", "/marks/../world.db", None, None),
         ]
         method, path, body, raw = self.rng.choice(cases)
         status, obj = self.call(method, path, body, tok, raw)
@@ -158,6 +167,11 @@ class Sim:
         self.server.stop()
 
         con = sqlite3.connect(self.db)
+        marks = con.execute("SELECT creature, id, sha, ext, kept FROM marks").fetchall()
+        assert {(c, i) for c, i, *_ in marks} == self.marked, "graffiti the world said yes to isn't on its wall exactly once"
+        for c, i, sha, ext, kept in marks:
+            assert not kept or (Path(self.db).parent / "marks" / f"{sha}.{ext}").is_file(), (c, i)
+        self.stats["pieces"] = len(marks)
         world_items = [n for (n,) in con.execute("SELECT name FROM items")]
         pending = [n for (n,) in con.execute("SELECT item FROM deliveries")]
         con.close()
@@ -226,7 +240,13 @@ class Bird:
         return f"{self.cid}:{self.live['tick']}:{self.rng.randrange(10**6)}:1"
 
     def post_act(self, body):
-        _, r = self.sim.call("POST", "/v1/act", body, self.token)
+        if body["action"] == "mark":
+            q = f"place={body['place']}&surface={body['surface']}&kind={body['kind']}"
+            _, r = self.sim.call("PUT", f"/v1/marks/{body['id']}?{q}", token=self.token, raw=png(64, 64, body["rgb"]))
+            if r.get("ok"):
+                self.sim.marked.add((self.cid, body["id"]))
+        else:
+            _, r = self.sim.call("POST", "/v1/act", body, self.token)
         key = (self.cid, body["id"])
         if key in self.sim.replies:
             assert self.sim.replies[key] == r, (key, self.sim.replies[key], r)
@@ -356,6 +376,11 @@ class Bird:
                 self.live["awake"] = False
                 self.save()
                 self.send({"action": "presence", "awake": False}, outbox=False)
+            elif roll < 0.95:
+                place = self.rng.choice(list(SURFACES))
+                self.send({"action": "mark", "place": place, "surface": self.rng.choice(list(SURFACES[place])),
+                           "kind": self.rng.choice(["tag", "throwup", "mural"]),
+                           "rgb": [self.rng.randrange(256) for _ in range(3)]})
             elif self.answered:
                 self.post_act(self.rng.choice(self.answered))   # a stray duplicate: must replay the same reply
                 self.sim.stats["duplicates"] += 1
@@ -370,7 +395,8 @@ def main():
     print(f"OK: {steps} steps, seed {seed}: {s['restarts']} server restarts, {s['crashes']} bird crashes, "
           f"{s['lost_replies']} lost replies, {s['never_sent']} never sent, {s['resends']} resends, "
           f"{s['vanished']} vanishings, {s['duplicates']} duplicate sends, {s['junk']} junk requests, {s['races']} races")
-    print(f"    {s['gifts']} gifts, {s['takes']} takes, {s['drops']} drops, {s['hides']} hides, {s['says']} lines said; "
+    print(f"    {s['gifts']} gifts, {s['takes']} takes, {s['drops']} drops, {s['hides']} hides, {s['says']} lines said, "
+          f"{s['pieces']} pieces of graffiti; "
           f"{len(sim.universe)} items, each in exactly one place; statuses {dict(sorted(s['statuses'].items()))}")
 
 

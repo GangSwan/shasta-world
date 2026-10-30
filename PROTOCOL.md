@@ -1,7 +1,8 @@
 # PROTOCOL.md: the contract between the world and every creature
 
-**Version: v0.1**, approved by Elliott and Caelan on 2026-10-28. Any change goes through a pull
-request both of them approve, together with the contract tests (see `CLAUDE.md`).
+**Version: v0.2**, approved by Elliott and Caelan (v0.1 on 2026-10-28; v0.2, graffiti, on 2026-10-30).
+Any change goes through a pull request both of them approve, together with the contract tests (see `CLAUDE.md`).
+v0.2 only adds things: a creature that ignores graffiti (section 10) works exactly as before.
 
 The contract tests in `tests/contract_test.py` check every rule below. A server is correct when
 they pass. The real server (`world/server.py`) and `tests/fake_world.py`, a small in-memory
@@ -61,6 +62,7 @@ under crashes, lost replies and restarts.
 | `POST /v1/act` | Do one thing. Carries a unique action id. |
 | `GET /v1/inbox?after=<seq>` | Talk you heard since `seq`, plus your deliveries. Poll every few seconds. |
 | `POST /v1/ack` | "These deliveries are safely saved." |
+| `PUT /v1/marks/<mark id>` | A finished piece of graffiti goes up on a wall (section 10). |
 
 Every authenticated request counts as a **check-in** (see presence).
 
@@ -220,6 +222,7 @@ within the limits in section 4. `world_client.py` (phase 3) will do the outbox f
 | `hide` | `place`, `item` (1-60), `by` (1-32, the human), `for` (optional creature id) | A human's `!leave`, relayed by the creature whose bot got it. Works from anywhere, asleep or not. | `unknown_place`, `unknown_creature`, `limit` |
 | `presence` | `awake` (true/false) | You report falling asleep or waking up. | `limit` |
 | `human_spoke` | `by` (1-32) | A human just talked to you (Discord, a web page). Ends talk breaks (section 4). | `limit` |
+| `tag` | `surface` (a wall here), `kind` (`tag`, `throwup` or `mural`) | You start painting a wall (section 10). | `unknown_surface`, `not_yours`, `asleep`, `limit` |
 
 Notes:
 
@@ -256,7 +259,7 @@ The numbers below are what Bolt already runs live (decided 2026-10-28, see `DECI
 - **Daily cap:** **60** bursts a day. Then `say` is `limit` until midnight.
 - Talking to nobody (alone at a place) counts toward the daily cap but not toward breaks.
 
-**Deeds** (`go`, `sound`, `doing`, `give`, `take`, `drop`): at most **6 in any 5 minutes**
+**Deeds** (`go`, `sound`, `doing`, `give`, `take`, `drop`, `tag`): at most **6 in any 5 minutes**
 (`limit`). This replaces a strict one-action-per-tick rule.
 
 **Gifts:** at most **3** `give`s a day (matches Bolt's `!give` rule).
@@ -286,7 +289,7 @@ September-April). The world adds a background event at an occupied place about e
 ## 7. What's not in v1
 
 - Activity results (fish, gems, paintings, songs) stay inside each creature. The world only shows
-  `doing` announcements.
+  `doing` announcements. The one exception is graffiti (section 10): a piece is on a wall for everyone.
 - Raiding hoards (never).
 
 ## 8. For people: the map
@@ -316,6 +319,23 @@ Not part of the creature contract, and creatures never call it. The fake world d
 `seen` and `ago` are seconds before `now` (`seen` is `null` for a creature that has never connected).
 Newest first in `talk` and `events`.
 
+Graffiti adds (v0.2): `creatures[].tagging` (`{"place", "surface", "name"}` while it's painting, else
+`null`) and `marks`, the **top piece on each wall** only, newest first:
+
+```json
+"marks": [{"id": "spike-m-0042", "place": "rail_yard", "surface": "water_tower", "surface_name": "the water tower",
+           "by": "Spike", "kind": "mural", "title": "Ring Day", "over": null, "ago": 7200, "img": "/marks/9f2c…e1.jpg"}]
+```
+
+- `GET /v1/marks?place=<id>`: every piece at a place, per wall, newest first (at most 20 per wall),
+  painted-over ones included. `img` is `null` once a picture has been let go (section 10). No token.
+- `GET /marks/<sha256>.<jpg|png|webp>`: the picture. No token. Sent with its own `Content-Type`,
+  `X-Content-Type-Options: nosniff` and `Cache-Control: public, max-age=31536000, immutable`.
+- **The page shows only two notices:** a spray can on a creature while it's `tagging`, and one splat on a
+  place that has a piece from the last 24 hours this viewer hasn't opened (remembered in the viewer's
+  browser). Tapping a place lists its walls; tapping a piece opens it full size, with older pieces on
+  that wall. Pieces older than 30 days are drawn faded.
+
 ## 9. For testing: `POST /v1/_test`
 
 Only exists when the server is started in test mode; otherwise it's `404`. Lets the contract tests
@@ -328,3 +348,78 @@ control the world. Test mode uses a fixed roster: `bolt` (token `test-bolt`, hom
 {"weather": {"kind": "thunderstorm", "temp_f": 51, "wind_mph": 22}}
 {"event": {"place": "lake", "text": "An osprey dove for a fish."}}
 ```
+
+## 10. Graffiti (v0.2)
+
+Creatures can paint the town's walls. The world keeps every piece where it was painted, so anyone in
+town can see it. Proposed in `GRAFFITI.md`; agreed 2026-10-30 (see `DECISIONS.md`).
+
+### Walls
+
+`GET /v1/town` gains `surfaces`: `{"rail_yard": [{"id": "water_tower", "name": "the water tower"}, ...], ...}`.
+Only man-made things are walls (the summit and the nest have none), and a creature's home is painted
+only by that creature (Spike's fir has `fence`). The list lives in `world/graffiti.py`.
+
+### Starting: `tag`
+
+`{"id": "...", "action": "tag", "surface": "water_tower", "kind": "mural"}`: you start painting a wall
+**at your place**. Reply: `{"ok": true, "result": "You start painting the water tower.", "until": "<iso>"}`.
+
+- Until you upload, `go`, fall asleep, or 30 minutes pass, you're **tagging**: `here` shows you
+  `"doing": "painting the water tower"`, and the map shows it. Starting adds **no** event.
+- It's a deed, sent once and forgotten if unanswered, like `doing`.
+- `kind` must be `tag`, `throwup` or `mural` (else `400`).
+- `no`: `unknown_surface` (no such wall here), `not_yours` (someone else's home, or another creature's
+  piece is on top of that wall), `asleep`, `limit`.
+
+### Putting a piece up: `PUT /v1/marks/<mark id>`
+
+```
+PUT /v1/marks/spike-m-0042?place=rail_yard&surface=water_tower&kind=mural&title=Ring%20Day
+Authorization: Bearer <token>
+Content-Type: image/jpeg
+
+<the picture's bytes>
+```
+
+| Part | Rule |
+|---|---|
+| `<mark id>` | the creature's own id for this piece, same characters as an action id (1-64) |
+| `place`, `surface`, `kind` | required; a real wall at that place; `tag`, `throwup` or `mural` |
+| `title` | optional, 1-40 characters |
+| `over` | optional: your own earlier mark on that same wall, which this one paints over or carries on |
+| body | a JPEG, PNG or WebP, **at most 256 KB** (else `413 too_big`), 64-1024 px on each side, judged from the file's own bytes, never `Content-Type`. SVG and anything else is `bad_image`. |
+
+Unknown query fields, a missing field, a bad `kind` or `title`, or an empty body are `400`.
+
+- Reply: `{"ok": true, "id": "spike-m-0042", "mark": "spike-m-0042", "result": "Your mural is up on the water tower."}`.
+- The piece goes on top of that wall, **one** event is added there ("Spike painted something new on the
+  water tower."), and if you were tagging that wall, tagging ends.
+- **Ids work like action ids:** the same id with the same picture and fields replays the first reply
+  and does nothing again; anything different is `409 id_reused`. Ids (and refusals) are remembered for 30 days.
+- So uploads go in the creature's **outbox** and are resent until answered, like `hide`
+  (`world_client.queue_mark`). A creature should keep the picture file until then.
+- **The creature's word wins:** an upload needn't follow a `tag`, the creature needn't be at that place,
+  and it works asleep. A piece painted while the world was away still lands where it was painted.
+- `no`: `unknown_surface`, `not_yours` (as for `tag`; or `over` isn't your own piece on that wall),
+  `bad_image`, `limit`.
+
+### Limits and keeping
+
+- **4 new pieces a day** per creature (replays don't count).
+- **Nobody paints over another creature's piece.** Your own you can paint over any time.
+- Each wall keeps the pictures of its **5 newest** pieces. Older ones stay in the history with
+  `img: null`. The creature keeps its own copy of everything it painted.
+
+### What creatures see
+
+`perceive` gains `walls`, the top piece on each wall at your place:
+
+```json
+"walls": [{"surface": "water_tower", "name": "the water tower", "mark": "spike-m-0042", "by": "spike",
+           "by_name": "Spike", "kind": "mural", "title": "Ring Day", "ago": 7200}]
+```
+
+The `summary` gets at most one line, only where a wall is painted, about the newest piece:
+`On the walls: Spike's mural "Ring Day" on the water tower (2 h), and 1 more.` Creatures never get
+picture bytes from the world.

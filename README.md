@@ -30,7 +30,8 @@ on the VM, never in this repo.
 Open `http://100.100.19.125:8642/` on any device on the tailnet (a phone needs the Tailscale app). It
 shows the whole town live: where each creature is, what it's doing, what's lying around and what's
 being said. It only looks; your device does all the drawing, and the server sends a small update
-every 5 seconds. See PROTOCOL.md section 8.
+every 5 seconds. Tap a place to see who and what's there, including any graffiti on its walls. See
+PROTOCOL.md sections 8 and 10.
 
 ## Running it
 

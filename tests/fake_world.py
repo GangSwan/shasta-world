@@ -1,8 +1,9 @@
-"""A small in-memory shasta-world that passes the contract tests (PROTOCOL.md v0.1).
+"""A small in-memory shasta-world that passes the contract tests (PROTOCOL.md v0.2).
 
 It exists to pin the protocol down before the real server (phase 2) is written. Stdlib only.
 Run it by hand with:  python tests/fake_world.py [port]   (always in test mode)
 """
+import hashlib
 import json
 import re
 import sys
@@ -10,7 +11,11 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from world import graffiti as G   # noqa: E402  (the walls and the picture checks are shared)
 
 PLACES = {
     "nest": "Bolt's nest", "junkyard": "the junkyard", "rail_yard": "the rail yard", "creek": "the creek",
@@ -37,7 +42,7 @@ HEARD_KEEP, IDS_KEEP = 86400, 30 * 86400
 SUMMARY_CHARS, SUMMARY_LINES = 700, 8
 
 ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,64}$")
-DEED_ACTIONS = {"go", "sound", "doing", "give", "take", "drop"}
+DEED_ACTIONS = {"go", "sound", "doing", "give", "take", "drop", "tag"}
 AWAKE_ONLY = DEED_ACTIONS | {"say"}
 
 # action: {field: (type, required, max length or None)}
@@ -53,6 +58,7 @@ ACTIONS = {
     "hide": {"place": (NAME, True, 64), "item": (TEXT, True, 60), "by": (TEXT, True, 32), "for": (WHO, False, 32)},
     "presence": {"awake": (BOOL, True, None)},
     "human_spoke": {"by": (TEXT, True, 32)},
+    "tag": {"surface": (NAME, True, 32), "kind": (NAME, True, 16)},
 }
 
 
@@ -96,13 +102,14 @@ class World:
         self.creatures = {cid: {"id": cid, "name": n, "home": h, "place": h, "awake": True, "seen": None,
                                 "doing": None, "doing_until": 0, "day": None, "said": 0, "gifts": 0, "hides": 0,
                                 "streak": 0, "break_until": 0, "last_say": None, "deeds": [],
-                                "flood": {"presence": [], "human_spoke": []}}
+                                "flood": {"presence": [], "human_spoke": []}, "tagging": None, "pieces": 0}
                           for cid, (n, _, h) in self.roster.items()}
         self.items, self.next_item = {}, 1
         self.deliveries, self.next_delivery = {cid: [] for cid in self.roster}, 1
         self.events = {p: [] for p in PLACES}
         self.inbox, self.seq = {cid: [] for cid in self.roster}, 0
         self.done = {}
+        self.marks, self.files = [], {}      # pieces in the order painted; sha -> picture bytes
 
     def now(self):
         return time.time() + self.offset
@@ -135,13 +142,15 @@ class World:
     def _checkin(self, c, t):
         day = pacific(t).date().isoformat()
         if c["day"] != day:
-            c.update(day=day, said=0, gifts=0, hides=0)
+            c.update(day=day, said=0, gifts=0, hides=0, pieces=0)
         c["seen"] = t
         c["deeds"] = [x for x in c["deeds"] if t - x < DEED_WINDOW]
         for k in c["flood"]:
             c["flood"][k] = [x for x in c["flood"][k] if t - x < FLOOD_WINDOW]
         if c["doing"] and t >= c["doing_until"]:
             c["doing"] = None
+        if c["tagging"] and t >= c["tagging"]["until"]:
+            c["tagging"] = None
         self.inbox[c["id"]] = [h for h in self.inbox[c["id"]] if t - h["t"] < HEARD_KEEP]
         self.done = {k: v for k, v in self.done.items() if t - v[2] < IDS_KEEP}
 
@@ -159,7 +168,7 @@ class World:
         return {"left_today": max(0, SAY_PER_DAY - c["said"]),
                 "break_until": pacific(c["break_until"]).isoformat(timespec="seconds") if c["break_until"] > t else None}
 
-    def _summary(self, c, t, here, items, recent, deliveries, around=()):
+    def _summary(self, c, t, here, items, recent, deliveries, around=(), walls=()):
         lt = pacific(t)
         part = self._part(lt.hour)
         w = self.weather
@@ -184,6 +193,8 @@ class World:
             lines.append(f"You're on a talk break until {pacific(c['break_until']).strftime('%H:%M')}.")
         if deliveries:
             lines.append("Waiting for you: " + ", ".join(d["item"] for d in deliveries[:5]) + ".")
+        if walls:
+            lines.append(G.walls_line(walls))
         recent = list(recent)
         while True:
             out = lines + (["Lately: " + " ".join(recent)] if recent else [])
@@ -212,13 +223,14 @@ class World:
                  for i in self.items.values() if i["place"] == c["place"]]
         recent = [e for _, e in self.events[c["place"]][-5:]]
         deliveries = list(self.deliveries[c["id"]])
+        walls = self._walls(c["place"], t)
         return {"ok": True, "now": lt.isoformat(timespec="seconds"), "part": self._part(lt.hour), "season": season,
                 "weather": dict(self.weather),
                 "you": {"id": c["id"], "place": c["place"], "awake": c["awake"]},
                 "place": {"id": c["place"], "name": PLACES[c["place"]]},
                 "here": here, "around": around, "items": items, "recent": recent, "cant_go": self._cant_go(c),
-                "talk": self._talk(c, t), "deliveries": deliveries,
-                "summary": self._summary(c, t, here, items, recent, deliveries, around)}
+                "talk": self._talk(c, t), "deliveries": deliveries, "walls": walls,
+                "summary": self._summary(c, t, here, items, recent, deliveries, around, walls)}
 
     # ---------- requests
     def handle(self, method, path, query, token, body):
@@ -228,7 +240,10 @@ class World:
                 return self._test_hook(body)
             routes = {("GET", "/v1/town"), ("POST", "/v1/hello"), ("GET", "/v1/perceive"), ("POST", "/v1/act"),
                       ("GET", "/v1/inbox"), ("POST", "/v1/ack")}
-            if (method, path) not in routes:
+            upload = G.MARK_PATH.match(path) if method == "PUT" else None
+            if method == "GET" and path == "/v1/marks":
+                return 200, self.marks_at(query)
+            if (method, path) not in routes and not upload:
                 return 404, {"ok": False, "reason": "not_found", "message": "No such endpoint."}
             c = next((self.creatures[cid] for cid, r in self.roster.items() if token and r[1] == token), None)
             if c is None:
@@ -238,6 +253,8 @@ class World:
             t = self.now()
             self._checkin(c, t)
             self._sweep(c)
+            if upload:
+                return self.upload(c, t, upload.group(1), query, body)
             if path == "/v1/town":
                 return 200, self.town()
             if path == "/v1/perceive":
@@ -268,7 +285,8 @@ class World:
         return {"ok": True,
                 "places": [{"id": p, "name": n, "home_of": homes.get(p)} for p, n in PLACES.items()],
                 "creatures": [{"id": c["id"], "name": c["name"], "home": c["home"]} for c in self.creatures.values()],
-                "rules": list(RULES)}
+                "rules": list(RULES),
+                "surfaces": {p: [{"id": k, "name": n} for k, n in walls.items()] for p, walls in G.SURFACES.items()}}
 
     def read_inbox(self, c, query):
         try:
@@ -296,9 +314,11 @@ class World:
         if body["place"] != c["place"]:
             self._event(c["place"], f"{c['name']} left.")
             c["place"] = body["place"]
-            c["doing"] = None
+            c["doing"], c["tagging"] = None, None
             self._event(c["place"], f"{c['name']} turned up.")
         c["awake"] = body["awake"]
+        if not c["awake"]:
+            self._stop_tagging(c)
         self._sweep(c)
         return self.perceive(c, t)
 
@@ -385,7 +405,7 @@ class World:
         blocked = self._cant_go(c).get(to)
         if blocked:
             return False, {"reason": "blocked", "message": blocked}
-        c["place"], c["doing"] = to, None
+        c["place"], c["doing"], c["tagging"] = to, None, None
         self._event(here, f"{c['name']} flew off toward {PLACES[to]}.")
         self._event(to, f"{c['name']} flew in from {PLACES[here]}.")
         self._sweep(c)
@@ -484,6 +504,8 @@ class World:
 
     def _presence(self, c, t, f, here):
         c["awake"] = f["awake"]
+        if not c["awake"]:
+            self._stop_tagging(c)
         self._sweep(c)
         return True, {"result": "You're awake." if c["awake"] else "You're asleep."}
 
@@ -493,8 +515,122 @@ class World:
                 o["streak"], o["break_until"] = 0, 0
         return True, {"result": "Noted."}
 
+    # ---------- graffiti
+    def _top(self, place, surface):
+        return next((m for m in reversed(self.marks) if (m["place"], m["surface"]) == (place, surface)), None)
+
+    def _walls(self, place, t):
+        out = []
+        for surface, sname in G.SURFACES.get(place, {}).items():
+            m = self._top(place, surface)
+            if m:
+                out.append({"surface": surface, "name": sname, "mark": m["id"], "by": m["creature"],
+                            "by_name": self.creatures[m["creature"]]["name"], "kind": m["kind"], "title": m["title"],
+                            "ago": int(t - m["t"])})
+        return out
+
+    def _wall_problem(self, c, place, surface, over=None):
+        owner = next((o for o in self.creatures.values() if o["home"] == place), None)
+        if owner and owner is not c:
+            return f"That's {owner['name']}'s home. Only {owner['name']} paints there."
+        top = self._top(place, surface)
+        if top and top["creature"] != c["id"]:
+            return f"{self.creatures[top['creature']]['name']}'s piece is on {G.surface_name(place, surface)}. It's theirs."
+        if over and not any(m["creature"] == c["id"] and m["id"] == over and (m["place"], m["surface"]) == (place, surface)
+                            for m in self.marks):
+            return "You can only paint over your own piece on that wall."
+        return None
+
+    def marks_at(self, query):
+        place = (query.get("place") or [""])[0]
+        if place not in PLACES or set(query) - {"place"}:
+            raise BadRequest("Send ?place=<a place id>.")
+        t = self.now()
+        view = lambda m: {"id": m["id"], "place": m["place"], "surface": m["surface"],
+                          "surface_name": G.surface_name(m["place"], m["surface"]),
+                          "by": self.creatures[m["creature"]]["name"], "kind": m["kind"], "title": m["title"],
+                          "over": m["over"], "ago": int(t - m["t"]),
+                          "img": f"/marks/{m['sha']}.{m['ext']}" if m["kept"] else None}
+        return {"ok": True, "place": place, "walls": [
+            {"surface": s_, "name": n, "pieces": [view(m) for m in reversed(self.marks)
+                                                  if (m["place"], m["surface"]) == (place, s_)][:20]}
+            for s_, n in G.SURFACES.get(place, {}).items()]}
+
+    def upload(self, c, t, mid, query, data):
+        if not isinstance(data, bytes) or not data:
+            raise BadRequest("The body must be the picture's bytes.")
+        try:
+            f = G.upload_fields(query)
+        except ValueError as e:
+            raise BadRequest(str(e))
+        sha = hashlib.sha256(data).hexdigest()
+        canon = json.dumps({**f, "sha": sha}, sort_keys=True)
+        key = (c["id"], "mark/" + mid)
+        if key in self.done:
+            prev, reply, _ = self.done[key]
+            if prev != canon:
+                return 409, {"ok": False, "id": mid, "reason": "id_reused",
+                             "message": "That mark id was already used for a different piece."}
+            return 200, reply
+        reply = {"id": mid, **self._put_up(c, t, mid, f, data, sha)}
+        self.done[key] = (canon, reply, t)
+        return 200, reply
+
+    def _put_up(self, c, t, mid, f, data, sha):
+        def no(reason, message):
+            return {"ok": False, "reason": reason, "message": message}
+
+        place, surface = f["place"].lower(), f["surface"].lower()
+        sname = G.surface_name(place, surface) if place in PLACES else None
+        if not sname:
+            return no("unknown_surface", f"There's no wall called {surface} at {PLACES.get(place, place)}.")
+        problem = self._wall_problem(c, place, surface, f["over"])
+        if problem:
+            return no("not_yours", problem)
+        info = G.check_image(data)
+        if isinstance(info, str):
+            return no("bad_image", info)
+        if c["pieces"] >= G.PIECES_PER_DAY:
+            return no("limit", "You've painted enough pieces for today.")
+        self.files[sha] = data
+        self.marks.append({"creature": c["id"], "id": mid, "place": place, "surface": surface, "kind": f["kind"],
+                           "title": f["title"], "over": f["over"], "sha": sha, "ext": info[0], "t": t, "kept": True})
+        c["pieces"] += 1
+        g = c["tagging"]
+        if g and (g["place"], g["surface"]) == (place, surface):
+            c["tagging"] = None
+            if c["doing"] == f"painting {sname}":
+                c["doing"] = None
+        self._event(place, f"{c['name']} painted something new on {sname}.")
+        wall = [m for m in self.marks if (m["place"], m["surface"]) == (place, surface)]
+        for m in wall[:-G.KEEP_PER_SURFACE]:
+            m["kept"] = False
+        return {"ok": True, "mark": mid, "result": f"Your {G.KINDS[f['kind']]} is up on {sname}."}
+
+    def _stop_tagging(self, c):
+        g = c["tagging"]
+        if g and c["doing"] == "painting " + G.surface_name(g["place"], g["surface"]):
+            c["doing"] = None
+        c["tagging"] = None
+
+    def _tag(self, c, t, f, here):
+        surface, kind = f["surface"].lower(), f["kind"].lower()
+        if kind not in G.KINDS:
+            raise BadRequest(f"kind must be one of {', '.join(G.KINDS)}.")
+        sname = G.surface_name(here, surface)
+        if not sname:
+            return False, {"reason": "unknown_surface", "message": f"There's no wall called {surface} at {PLACES[here]}."}
+        problem = self._wall_problem(c, here, surface)
+        if problem:
+            return False, {"reason": "not_yours", "message": problem}
+        until = t + G.TAG_FOR
+        c["tagging"] = {"place": here, "surface": surface, "until": until}
+        c["doing"], c["doing_until"] = f"painting {sname}", until
+        return True, {"result": f"You start painting {sname}.",
+                      "until": pacific(until).isoformat(timespec="seconds")}
+
     _act_handlers = {"go": _go, "say": _say, "sound": _sound, "doing": _doing, "give": _give, "take": _take,
-                     "drop": _drop, "hide": _hide, "presence": _presence, "human_spoke": _human_spoke}
+                     "drop": _drop, "hide": _hide, "presence": _presence, "human_spoke": _human_spoke, "tag": _tag}
 
 
 def make_handler(world):
@@ -517,6 +653,12 @@ def make_handler(world):
             auth = self.headers.get("Authorization", "")
             token = auth[7:] if auth.startswith("Bearer ") else None
             body = None
+            if method == "PUT":
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > G.MAX_IMAGE:
+                    self.close_connection = True
+                    return self._reply(413, {"ok": False, "reason": "too_big", "message": "Pictures are at most 256 KB."})
+                body = self.rfile.read(n)
             if method == "POST":
                 n = int(self.headers.get("Content-Length") or 0)
                 if n > MAX_BODY:
@@ -538,6 +680,9 @@ def make_handler(world):
 
         def do_POST(self):
             self._go("POST")
+
+        def do_PUT(self):
+            self._go("PUT")
 
     return Handler
 

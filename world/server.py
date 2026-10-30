@@ -133,7 +133,8 @@ class World:
     def __init__(self, db_path, roster, test=False, rng=None, marks_dir=None):
         self.roster, self.test = roster, test
         if marks_dir is None:
-            marks_dir = tempfile.mkdtemp(prefix="shasta-marks-") if str(db_path) == ":memory:"                 else Path(db_path).parent / "marks"
+            marks_dir = (tempfile.mkdtemp(prefix="shasta-marks-") if str(db_path) == ":memory:"
+                         else Path(db_path).parent / "marks")
         self.marks_dir = Path(marks_dir)
         self.marks_dir.mkdir(parents=True, exist_ok=True)
         self.unlink_after = []
@@ -153,6 +154,7 @@ class World:
                 c.setdefault("tagging", None)
                 c.setdefault("pieces", 0)
                 self.db.execute("INSERT OR REPLACE INTO creatures VALUES (?, ?)", (cid, json.dumps(c)))
+                self.C[cid] = c          # the transaction writes self.C back at the end: it must be the new one
 
     def close(self):
         with self.lock:

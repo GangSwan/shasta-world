@@ -188,6 +188,26 @@ class Outbox(Base):
 
 
 class Graffiti(Base):
+    def test_a_database_from_before_graffiti_still_works(self):
+        wc, ws = self.client("spike"), {}
+        wc.look(ws, "rail_yard", True)
+        self.down()
+        import sqlite3
+        con = sqlite3.connect(self.db)               # creatures saved by the v0.1 server: no graffiti fields
+        for cid, data in con.execute("SELECT id, data FROM creatures").fetchall():
+            c = json.loads(data)
+            c.pop("tagging", None)
+            c.pop("pieces", None)
+            con.execute("UPDATE creatures SET data=? WHERE id=?", (json.dumps(c), cid))
+        con.commit()
+        con.close()
+        self.up()
+        wc2, ws2 = self.client("spike"), {}
+        self.assertIsNotNone(wc2.look(ws2, "rail_yard", True))
+        wc2.queue(ws2, "tag", surface="water_tower", kind="tag")
+        [(_, r)] = wc2.send(ws2)
+        self.assertTrue(r["ok"], r)
+
     def picture(self, rgb=(200, 60, 40)):
         f = Path(self.tmp.name) / f"piece-{rgb[0]}.png"
         f.write_bytes(png(rgb=rgb))

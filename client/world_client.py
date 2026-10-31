@@ -27,9 +27,15 @@ A tick, the way PROTOCOL.md section 3 wants it:
             put_back_in_hoard(body["item"]) # refused, or given up after 30 days
     wc.ack(ws)                              # "those deliveries are safely saved"
     SAVE
+
+Graffiti (PROTOCOL.md v0.2): `wc.queue(ws, "tag", surface="water_tower", kind="mural")` says you've started
+(sent once). When the picture is saved on disk, `wc.queue_mark(ws, path, place=..., surface=..., kind=...)`
+puts the upload in the outbox: it's resent with the same id until the world answers, like a give, and
+`send` hands back its reply with body["action"] == "mark". Keep the file until then.
 """
 import http.client
 import json
+import os
 import secrets
 import threading
 import time
@@ -37,8 +43,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-ACTIONS = {"go", "say", "sound", "doing", "give", "take", "drop", "hide", "presence", "human_spoke"}
-RESEND = {"give", "drop", "take", "hide"}  # they move things: resent until answered. The rest are sent once
+ACTIONS = {"go", "say", "sound", "doing", "give", "take", "drop", "hide", "presence", "human_spoke", "tag"}
+RESEND = {"give", "drop", "take", "hide", "mark"}   # resent until answered (a mark is a piece of graffiti going up)
+PICTURE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 GIVE_UP = 30 * 86400                       # the world remembers action ids for 30 days
 
 
@@ -58,16 +65,16 @@ class WorldClient:
         self._town = None
 
     # ---------- plumbing
-    def _call(self, method, path, body=None):
+    def _call(self, method, path, body=None, raw=None, ctype="application/json"):
         """(status, reply), or None when the world is away. Never raises, never waits past the timeout."""
         with self._lock:
             if time.time() < self._retry_at:
                 return None
-        data = json.dumps(body).encode() if body is not None else None
+        data = raw if raw is not None else json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.url + path, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
         if data is not None:
-            req.add_header("Content-Type", "application/json")
+            req.add_header("Content-Type", ctype)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 status, raw = r.status, r.read()
@@ -192,6 +199,26 @@ class WorldClient:
         self._mine.add(body["id"])
         return body["id"]
 
+    def queue_mark(self, ws, path, place, surface, kind, title=None, over=None):
+        """Put a finished piece of graffiti (a picture file on disk) in the outbox. Save before send().
+        Returns its mark id, which `over` takes later to paint over or keep working on it."""
+        mid = f"{self.creature}-m-{int(time.time() * 1000)}-{secrets.token_hex(2)}"
+        body = {"id": mid, "action": "mark", "file": str(path), "place": place, "surface": surface, "kind": kind,
+                **({"title": title} if title else {}), **({"over": over} if over else {})}
+        ws.setdefault("outbox", []).append({"body": body, "queued": time.time()})
+        self._mine.add(mid)
+        return mid
+
+    def _send_mark(self, body):
+        try:
+            with open(body["file"], "rb") as f:
+                data = f.read()
+        except OSError as e:
+            return 200, {"ok": False, "id": body["id"], "reason": "no_file", "message": f"The picture is gone ({e})."}
+        q = urllib.parse.urlencode({k: body[k] for k in ("place", "surface", "kind", "title", "over") if body.get(k)})
+        ctype = PICTURE_TYPES.get(os.path.splitext(body["file"])[1].lower(), "application/octet-stream")
+        return self._call("PUT", f"/v1/marks/{urllib.parse.quote(body['id'])}?{q}", raw=data, ctype=ctype)
+
     def send(self, ws):
         """Send the outbox, oldest first. Returns [(body, reply)] for every action that got an answer
         (or was given up on), and keeps give/drop/take/hide that didn't. Save again afterwards."""
@@ -205,7 +232,7 @@ class WorldClient:
                 answered.append((body, {"ok": False, "id": body["id"], "reason": "gave_up",
                                         "message": "No answer from the world for 30 days."}))
                 continue
-            r = None if self.needs_hello else self._call("POST", "/v1/act", body)
+            r = None if self.needs_hello else self._send_mark(body) if body["action"] == "mark"                 else self._call("POST", "/v1/act", body)
             if r is None:
                 if resend:
                     keep.append(entry)

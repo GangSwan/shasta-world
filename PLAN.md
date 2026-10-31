@@ -76,7 +76,7 @@ trout, sifting a garnet, a painting) stay in the creature; the world only says w
 | 4 | Spike joins, behind `world_url` in his config | Elliott's Claude | Spike lives in the world and falls back to his own town when it's off |
 | 5 | Bolt joins, behind a switch | Caelan's Claude | the same, for Bolt |
 | 6 | Hosting: VM setup script, Tailscale, systemd service, auto-deploy, backups | Elliott + his Claude | survives a reboot; both creatures connect from their own houses |
-| 7 | Shared town map showing every creature | probably Caelan | after 4 and 5 work |
+| 7 | Shared town map showing every creature | Elliott's Claude (art from Bolt's page) | the map page at `/` shows both creatures live, on phones too |
 | 8 | Retire the Discord creature-to-creature code | both | both creatures are in the world. Discord stays for diaries and humans. |
 
 Phases 4 and 5 can run in parallel; they only depend on 1-3.

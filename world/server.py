@@ -9,12 +9,15 @@ never halfway, and a creature that never got its reply resends the same action i
 """
 import argparse
 import contextlib
+import hashlib
 import hmac
 import json
 import random
 import re
 import sqlite3
+import shutil
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -22,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from world import graffiti as G
 from world.town import PLACES, RULES, WEATHER_KINDS, background_event, fetch_weather, pacific, part_of_day, season
 
 TEST_ROSTER = {
@@ -39,6 +43,10 @@ DEEDS, DEED_WINDOW = 6, 300
 FLOOD, FLOOD_WINDOW = 30, 300
 DOING_FOR = 900
 HEARD_KEEP, IDS_KEEP = 86400, 30 * 86400
+MAP_TALK, MAP_EVENTS = 12, 30       # what the map page shows: the newest talk lines and events in town
+MAP_PAGE = Path(__file__).with_name("map.html")
+MARK_KEYS = ("creature", "id", "place", "surface", "kind", "title", "over", "sha", "ext", "t", "kept")
+MARK_COLS = ", ".join(MARK_KEYS)
 EVENTS_KEPT = 20
 SUMMARY_CHARS, SUMMARY_LINES = 700, 8
 EVENT_EVERY = (600, 1200)          # a background event at an occupied place every 10-20 minutes
@@ -47,7 +55,7 @@ BACKUPS_KEPT = 14
 DEFAULT_WEATHER = {"kind": "clear", "temp_f": 55, "wind_mph": 3}
 
 ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,64}$")
-DEED_ACTIONS = {"go", "sound", "doing", "give", "take", "drop"}
+DEED_ACTIONS = {"go", "sound", "doing", "give", "take", "drop", "tag"}
 AWAKE_ONLY = DEED_ACTIONS | {"say"}
 TEXT, NAME, WHO, BOOL = "text", "name", "who", "bool"
 ACTIONS = {   # action: {field: (kind, required, max length)}
@@ -61,6 +69,7 @@ ACTIONS = {   # action: {field: (kind, required, max length)}
     "hide": {"place": (NAME, True, 64), "item": (TEXT, True, 60), "by": (TEXT, True, 32), "for": (WHO, False, 32)},
     "presence": {"awake": (BOOL, True, None)},
     "human_spoke": {"by": (TEXT, True, 32)},
+    "tag": {"surface": (NAME, True, 32), "kind": (NAME, True, 16)},
 }
 ROUTES = {("GET", "/v1/town"), ("POST", "/v1/hello"), ("GET", "/v1/perceive"), ("POST", "/v1/act"),
           ("GET", "/v1/inbox"), ("POST", "/v1/ack")}
@@ -79,6 +88,11 @@ CREATE TABLE IF NOT EXISTS heard (seq INTEGER PRIMARY KEY AUTOINCREMENT, listene
 CREATE TABLE IF NOT EXISTS actions (creature TEXT NOT NULL, id TEXT NOT NULL, canon TEXT NOT NULL, reply TEXT NOT NULL,
                                     t REAL NOT NULL, PRIMARY KEY (creature, id));
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS marks (creature TEXT NOT NULL, id TEXT NOT NULL, place TEXT NOT NULL, surface TEXT NOT NULL,
+                                  kind TEXT NOT NULL, title TEXT, over TEXT, sha TEXT NOT NULL, ext TEXT NOT NULL,
+                                  w INTEGER NOT NULL, h INTEGER NOT NULL, t REAL NOT NULL, kept INTEGER NOT NULL DEFAULT 1,
+                                  PRIMARY KEY (creature, id));
+CREATE INDEX IF NOT EXISTS marks_wall ON marks(place, surface);
 CREATE INDEX IF NOT EXISTS items_place ON items(place);
 CREATE INDEX IF NOT EXISTS deliveries_creature ON deliveries(creature);
 CREATE INDEX IF NOT EXISTS events_place ON events(place, n);
@@ -112,12 +126,18 @@ def new_creature(cid, name, home):
     return {"id": cid, "name": name, "home": home, "place": home, "awake": True, "seen": None,
             "doing": None, "doing_until": 0, "day": None, "said": 0, "gifts": 0, "hides": 0,
             "streak": 0, "break_until": 0, "last_say": None, "deeds": [],
-            "flood": {"presence": [], "human_spoke": []}}
+            "flood": {"presence": [], "human_spoke": []}, "tagging": None, "pieces": 0}
 
 
 class World:
-    def __init__(self, db_path, roster, test=False, rng=None):
+    def __init__(self, db_path, roster, test=False, rng=None, marks_dir=None):
         self.roster, self.test = roster, test
+        if marks_dir is None:
+            marks_dir = (tempfile.mkdtemp(prefix="shasta-marks-") if str(db_path) == ":memory:"
+                         else Path(db_path).parent / "marks")
+        self.marks_dir = Path(marks_dir)
+        self.marks_dir.mkdir(parents=True, exist_ok=True)
+        self.unlink_after = []
         self.rng = rng or random.Random()
         self.lock = threading.Lock()
         self.db = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
@@ -131,7 +151,10 @@ class World:
                 row = self.db.execute("SELECT data FROM creatures WHERE id=?", (cid,)).fetchone()
                 c = json.loads(row[0]) if row else new_creature(cid, r["name"], r["home"])
                 c.update(name=r["name"], home=r["home"])
+                c.setdefault("tagging", None)
+                c.setdefault("pieces", 0)
                 self.db.execute("INSERT OR REPLACE INTO creatures VALUES (?, ?)", (cid, json.dumps(c)))
+                self.C[cid] = c          # the transaction writes self.C back at the end: it must be the new one
 
     def close(self):
         with self.lock:
@@ -215,13 +238,15 @@ class World:
     def _checkin(self, c, t):
         day = pacific(t).date().isoformat()
         if c["day"] != day:
-            c.update(day=day, said=0, gifts=0, hides=0)
+            c.update(day=day, said=0, gifts=0, hides=0, pieces=0)
         c["seen"] = t
         c["deeds"] = [x for x in c["deeds"] if t - x < DEED_WINDOW]
         for k in c["flood"]:
             c["flood"][k] = [x for x in c["flood"][k] if t - x < FLOOD_WINDOW]
         if c["doing"] and t >= c["doing_until"]:
             c["doing"] = None
+        if c["tagging"] and t >= c["tagging"]["until"]:
+            c["tagging"] = None
         self.db.execute("DELETE FROM heard WHERE t < ?", (t - HEARD_KEEP,))
         self.db.execute("DELETE FROM actions WHERE t < ?", (t - IDS_KEEP,))
 
@@ -239,7 +264,7 @@ class World:
         return {"left_today": max(0, SAY_PER_DAY - c["said"]),
                 "break_until": iso(c["break_until"]) if c["break_until"] > t else None}
 
-    def _summary(self, c, t, weather, here, items, recent, deliveries):
+    def _summary(self, c, t, weather, here, items, recent, deliveries, around=(), walls=()):
         w = weather
         lines = [f"{part_of_day(pacific(t).hour).capitalize()} at {PLACES[c['place']]}, {w['kind']} and {w['temp_f']}°F."]
         if not c["awake"]:
@@ -249,6 +274,10 @@ class World:
                                   for h in here))
         else:
             lines.append("Nobody else is here.")
+        if around:
+            lines.append("Around town: " + "; ".join(f"{o['name']} is at {PLACES[o['place']]} ("
+                                                     + ("away" if o["state"] == "quiet" else o["state"]) + ")"
+                                                     for o in around) + ".")
         if items:
             bits = [a_or_an(i["name"]) + (f" ({i['by']} left it for {self.C[i['for']]['name']})"
                                           if i["for"] in self.C else "") for i in items[:5]]
@@ -257,6 +286,8 @@ class World:
             lines.append(f"You're on a talk break until {pacific(c['break_until']).strftime('%H:%M')}.")
         if deliveries:
             lines.append("Waiting for you: " + ", ".join(d["item"] for d in deliveries[:5]) + ".")
+        if walls:
+            lines.append(G.walls_line(walls))
         recent = list(recent)
         while True:
             out = lines + (["Lately: " + " ".join(recent)] if recent else [])
@@ -273,18 +304,21 @@ class World:
         weather = self.weather()
         here = [{"id": o["id"], "name": o["name"], "state": self._state(o, t), "doing": o["doing"]}
                 for o in self.C.values() if o is not c and o["seen"] is not None and o["place"] == c["place"]]
+        around = [{"id": o["id"], "name": o["name"], "place": o["place"], "state": self._state(o, t)}
+                  for o in self.C.values() if o is not c and o["seen"] is not None and o["place"] != c["place"]]
         items = self._items_at(c["place"])
         recent = [r[0] for r in self.db.execute(
             "SELECT text FROM (SELECT n, text FROM events WHERE place=? ORDER BY n DESC LIMIT 5) ORDER BY n",
             (c["place"],))]
         deliveries = self._deliveries(c["id"])
+        walls = self._walls(c["place"], t)
         return {"ok": True, "now": lt.isoformat(timespec="seconds"), "part": part_of_day(lt.hour),
                 "season": season(lt.month), "weather": weather,
                 "you": {"id": c["id"], "place": c["place"], "awake": c["awake"]},
                 "place": {"id": c["place"], "name": PLACES[c["place"]]},
-                "here": here, "items": items, "recent": recent, "cant_go": self._cant_go(c),
-                "talk": self._talk(c, t), "deliveries": deliveries,
-                "summary": self._summary(c, t, weather, here, items, recent, deliveries)}
+                "here": here, "around": around, "items": items, "recent": recent, "cant_go": self._cant_go(c),
+                "talk": self._talk(c, t), "deliveries": deliveries, "walls": walls,
+                "summary": self._summary(c, t, weather, here, items, recent, deliveries, around, walls)}
 
     # ---------- requests
     def handle(self, method, path, query, token, body):
@@ -292,36 +326,208 @@ class World:
         if path == "/v1/_test" and self.test and method == "POST":
             with self.lock:
                 return self._test_hook(body)
-        if (method, path) not in ROUTES:
+        if method == "GET" and path == "/v1/map":
+            with self.lock:
+                return 200, self.map_view()
+        if method == "GET" and path == "/v1/marks":
+            with self.lock:
+                return 200, self.marks_at(query)
+        upload = G.MARK_PATH.match(path) if method == "PUT" else None
+        if (method, path) not in ROUTES and not upload:
             return 404, {"ok": False, "reason": "not_found", "message": "No such endpoint."}
         cid = next((k for k, r in self.roster.items() if token and hmac.compare_digest(r["token"], token)), None)
         if cid is None:
             return 401, {"ok": False, "reason": "unauthorized", "message": "Unknown or missing token."}
         if method == "POST" and not isinstance(body, dict):
             raise BadRequest("The body must be a JSON object.")
-        with self.lock, self._tx():
-            c = self.C[cid]
-            t = self.now()
-            self._checkin(c, t)
-            self._sweep(c)
-            if path == "/v1/town":
-                return 200, self.town()
-            if path == "/v1/perceive":
-                return 200, self.perceive(c, t)
-            if path == "/v1/inbox":
-                return 200, self.read_inbox(c, query)
-            if path == "/v1/ack":
-                return 200, self.ack(c, body)
-            if path == "/v1/hello":
-                return 200, self.hello(c, t, body)
-            return self.act(c, t, body)
+        with self.lock:
+            try:
+                with self._tx():
+                    return self._route(cid, path, query, body, upload)
+            finally:
+                for f in self.unlink_after:     # pieces painted over, only once the change is committed
+                    if not self.db.execute("SELECT 1 FROM marks WHERE sha=? AND kept=1", (f.stem,)).fetchone():
+                        f.unlink(missing_ok=True)
+                self.unlink_after = []
+
+    def _route(self, cid, path, query, body, upload):
+        c = self.C[cid]
+        t = self.now()
+        self._checkin(c, t)
+        self._sweep(c)
+        if upload:
+            return self.upload(c, t, upload.group(1), query, body)
+        if path == "/v1/town":
+            return 200, self.town()
+        if path == "/v1/perceive":
+            return 200, self.perceive(c, t)
+        if path == "/v1/inbox":
+            return 200, self.read_inbox(c, query)
+        if path == "/v1/ack":
+            return 200, self.ack(c, body)
+        if path == "/v1/hello":
+            return 200, self.hello(c, t, body)
+        return self.act(c, t, body)
+
+    def map_view(self):
+        """GET /v1/map: the whole town right now, for the map page people look at. Read-only and no token
+        (the server only listens on the tailnet): it never checks anyone in, and it shows only what any
+        creature standing there could see. No deliveries, no limits, no tokens."""
+        t = self.now()
+        lt = pacific(t)
+        cs = {cid: json.loads(d) for cid, d in self.db.execute("SELECT id, data FROM creatures") if cid in self.roster}
+        name = lambda cid: cs[cid]["name"] if cid in cs else cid
+        creatures = [{"id": c["id"], "name": c["name"], "home": c["home"], "place": c["place"],
+                      "state": self._state(c, t), "doing": c["doing"] if c["doing"] and t < c["doing_until"] else None,
+                      "seen": int(t - c["seen"]) if c["seen"] is not None else None,
+                      "tagging": self._tagging(c, t)}
+                     for c in sorted(cs.values(), key=lambda c: c["id"])]
+        items = [{"name": n, "place": place, "by": by, "for": name(f) if f else None} for n, place, by, f in
+                 self.db.execute("SELECT name, place, by, for_ FROM items ORDER BY n")]
+        talk = [{"from": frm, "name": nm, "to": name(to) if to else None, "text": text, "place": place, "ago": int(t - at)}
+                for frm, nm, to, text, place, at in self.db.execute(
+                    "SELECT frm, name, to_, text, place, MAX(t) FROM heard GROUP BY frm, t, text ORDER BY MAX(t) DESC LIMIT ?",
+                    (MAP_TALK,))]
+        events = [{"place": place, "text": text, "ago": int(t - at)} for place, text, at in self.db.execute(
+            "SELECT place, text, t FROM events ORDER BY n DESC LIMIT ?", (MAP_EVENTS,))]
+        return {"ok": True, "now": lt.isoformat(timespec="seconds"), "hour": lt.hour, "part": part_of_day(lt.hour),
+                "season": season(lt.month), "weather": self.weather(), "places": PLACES,
+                "creatures": creatures, "items": items, "talk": talk, "events": events,
+                "marks": [self._mark_view(r, t, name) for r in self.db.execute(
+                    f"SELECT {MARK_COLS} FROM marks m WHERE rowid = (SELECT MAX(rowid) FROM marks "
+                    "WHERE place=m.place AND surface=m.surface) ORDER BY rowid DESC")]}
+
+    # ---------- graffiti (PROTOCOL.md v0.2)
+    def _tagging(self, c, t):
+        g = c.get("tagging")
+        if not g or t >= g["until"] or not c["awake"]:
+            return None
+        return {"place": g["place"], "surface": g["surface"], "name": G.surface_name(g["place"], g["surface"])}
+
+    def _name_of(self, cid):
+        return self.roster[cid]["name"] if cid in self.roster else cid
+
+    def _top(self, place, surface):
+        row = self.db.execute(f"SELECT {MARK_COLS} FROM marks WHERE place=? AND surface=? ORDER BY rowid DESC LIMIT 1",
+                              (place, surface)).fetchone()
+        return dict(zip(MARK_KEYS, row)) if row else None
+
+    def _mark_view(self, row, t, name=None):
+        m = dict(zip(MARK_KEYS, row))
+        return {"id": m["id"], "place": m["place"], "surface": m["surface"],
+                "surface_name": G.surface_name(m["place"], m["surface"]), "by": (name or self._name_of)(m["creature"]),
+                "kind": m["kind"], "title": m["title"], "over": m["over"], "ago": int(t - m["t"]),
+                "img": f"/marks/{m['sha']}.{m['ext']}" if m["kept"] else None}
+
+    def _walls(self, place, t):
+        out = []
+        for surface, sname in G.SURFACES.get(place, {}).items():
+            m = self._top(place, surface)
+            if m:
+                out.append({"surface": surface, "name": sname, "mark": m["id"], "by": m["creature"],
+                            "by_name": self._name_of(m["creature"]), "kind": m["kind"], "title": m["title"],
+                            "ago": int(t - m["t"])})
+        return out
+
+    def _wall_problem(self, c, place, surface, over=None):
+        """Why c can't paint this wall (plain English), or None."""
+        owner = next((cid for cid, r in self.roster.items() if r["home"] == place), None)
+        if owner and owner != c["id"]:
+            return f"That's {self._name_of(owner)}'s home. Only {self._name_of(owner)} paints there."
+        top = self._top(place, surface)
+        if top and top["creature"] != c["id"]:
+            return f"{self._name_of(top['creature'])}'s piece is on {G.surface_name(place, surface)}. It's theirs."
+        if over:
+            row = self.db.execute("SELECT place, surface FROM marks WHERE creature=? AND id=?", (c["id"], over)).fetchone()
+            if row != (place, surface):
+                return "You can only paint over your own piece on that wall."
+        return None
+
+    def marks_at(self, query):
+        """GET /v1/marks?place=<id>: every piece at a place, newest first per wall. No token, read-only."""
+        place = (query.get("place") or [""])[0]
+        if place not in PLACES or set(query) - {"place"}:
+            raise BadRequest("Send ?place=<a place id>.")
+        t = self.now()
+        walls = []
+        for surface, sname in G.SURFACES.get(place, {}).items():
+            rows = self.db.execute(f"SELECT {MARK_COLS} FROM marks WHERE place=? AND surface=? ORDER BY rowid DESC LIMIT 20",
+                                   (place, surface)).fetchall()
+            walls.append({"surface": surface, "name": sname, "pieces": [self._mark_view(r, t) for r in rows]})
+        return {"ok": True, "place": place, "walls": walls}
+
+    def mark_file(self, sha, ext):
+        f = self.marks_dir / f"{sha}.{ext}"
+        return f if f.is_file() else None
+
+    def upload(self, c, t, mid, query, data):
+        """PUT /v1/marks/<id>: a finished piece goes up on a wall. Replays like an action id."""
+        if not isinstance(data, bytes) or not data:
+            raise BadRequest("The body must be the picture's bytes.")
+        try:
+            f = G.upload_fields(query)
+        except ValueError as e:
+            raise BadRequest(str(e))
+        sha = hashlib.sha256(data).hexdigest()
+        canon = json.dumps({**f, "sha": sha}, sort_keys=True)
+        key = "mark/" + mid
+        row = self.db.execute("SELECT canon, reply FROM actions WHERE creature=? AND id=?", (c["id"], key)).fetchone()
+        if row:
+            if row[0] != canon:
+                return 409, {"ok": False, "id": mid, "reason": "id_reused",
+                             "message": "That mark id was already used for a different piece."}
+            return 200, json.loads(row[1])
+        reply = {"id": mid, **self._put_up(c, t, mid, f, data, sha)}
+        self.db.execute("INSERT INTO actions VALUES (?, ?, ?, ?, ?)", (c["id"], key, canon, json.dumps(reply), t))
+        return 200, reply
+
+    def _put_up(self, c, t, mid, f, data, sha):
+        def no(reason, message):
+            return {"ok": False, "reason": reason, "message": message}
+
+        place, surface = f["place"].lower(), f["surface"].lower()
+        sname = G.surface_name(place, surface) if place in PLACES else None
+        if not sname:
+            return no("unknown_surface", f"There's no wall called {surface} at {PLACES.get(place, place)}.")
+        problem = self._wall_problem(c, place, surface, f["over"])
+        if problem:
+            return no("not_yours", problem)
+        info = G.check_image(data)
+        if isinstance(info, str):
+            return no("bad_image", info)
+        if c["pieces"] >= G.PIECES_PER_DAY:
+            return no("limit", "You've painted enough pieces for today.")
+        ext, w, h = info
+        dest = self.marks_dir / f"{sha}.{ext}"
+        if not dest.exists():
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(dest)
+        self.db.execute("INSERT INTO marks (creature, id, place, surface, kind, title, over, sha, ext, w, h, t) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (c["id"], mid, place, surface, f["kind"], f["title"], f["over"], sha, ext, w, h, t))
+        c["pieces"] += 1
+        g = c["tagging"]
+        if g and (g["place"], g["surface"]) == (place, surface):
+            c["tagging"] = None
+            if c["doing"] == f"painting {sname}":
+                c["doing"] = None
+        self._event(place, f"{c['name']} painted something new on {sname}.", t)
+        for sha_, ext_ in self.db.execute("SELECT sha, ext FROM marks WHERE place=? AND surface=? AND kept=1 "
+                                          "ORDER BY rowid DESC LIMIT -1 OFFSET ?",
+                                          (place, surface, G.KEEP_PER_SURFACE)).fetchall():
+            self.unlink_after.append(self.marks_dir / f"{sha_}.{ext_}")
+        self.db.execute("UPDATE marks SET kept=0 WHERE place=? AND surface=? AND kept=1 AND rowid NOT IN "
+                        "(SELECT rowid FROM marks WHERE place=? AND surface=? ORDER BY rowid DESC LIMIT ?)",
+                        (place, surface, place, surface, G.KEEP_PER_SURFACE))
+        return {"ok": True, "mark": mid, "result": f"Your {G.KINDS[f['kind']]} is up on {sname}."}
 
     def _test_hook(self, body):
         if not isinstance(body, dict):
             raise BadRequest("The body must be a JSON object.")
         with self._tx():
             if body.get("reset"):
-                for table in ("items", "deliveries", "events", "heard", "actions", "meta"):
+                for table in ("items", "deliveries", "events", "heard", "actions", "meta", "marks"):
                     self.db.execute(f"DELETE FROM {table}")
                 self.offset = 0.0
                 for cid, r in self.roster.items():
@@ -346,7 +552,8 @@ class World:
         return {"ok": True,
                 "places": [{"id": p, "name": n, "home_of": homes.get(p)} for p, n in PLACES.items()],
                 "creatures": [{"id": c["id"], "name": c["name"], "home": c["home"]} for c in self.C.values()],
-                "rules": list(RULES)}
+                "rules": list(RULES),
+                "surfaces": {p: [{"id": k, "name": n} for k, n in walls.items()] for p, walls in G.SURFACES.items()}}
 
     def read_inbox(self, c, query):
         try:
@@ -378,9 +585,11 @@ class World:
             raise BadRequest("Unknown place, or awake isn't true/false.")
         if body["place"] != c["place"]:
             self._event(c["place"], f"{c['name']} left.")
-            c["place"], c["doing"] = body["place"], None
+            c["place"], c["doing"], c["tagging"] = body["place"], None, None
             self._event(c["place"], f"{c['name']} turned up.")
         c["awake"] = body["awake"]
+        if not c["awake"]:
+            self._stop_tagging(c)
         self._sweep(c)
         return self.perceive(c, t)
 
@@ -463,7 +672,7 @@ class World:
         blocked = self._cant_go(c).get(to)
         if blocked:
             return False, {"reason": "blocked", "message": blocked}
-        c["place"], c["doing"] = to, None
+        c["place"], c["doing"], c["tagging"] = to, None, None
         self._event(here, f"{c['name']} flew off toward {PLACES[to]}.")
         self._event(to, f"{c['name']} flew in from {PLACES[here]}.")
         self._sweep(c)
@@ -553,8 +762,31 @@ class World:
 
     def _presence(self, c, t, f, here):
         c["awake"] = f["awake"]
+        if not c["awake"]:
+            self._stop_tagging(c)
         self._sweep(c)
         return True, {"result": "You're awake." if c["awake"] else "You're asleep."}
+
+    def _stop_tagging(self, c):
+        g = c["tagging"]
+        if g and c["doing"] == "painting " + G.surface_name(g["place"], g["surface"]):
+            c["doing"] = None
+        c["tagging"] = None
+
+    def _tag(self, c, t, f, here):
+        surface, kind = f["surface"].lower(), f["kind"].lower()
+        if kind not in G.KINDS:
+            raise BadRequest(f"kind must be one of {', '.join(G.KINDS)}.")
+        sname = G.surface_name(here, surface)
+        if not sname:
+            return False, {"reason": "unknown_surface", "message": f"There's no wall called {surface} at {PLACES[here]}."}
+        problem = self._wall_problem(c, here, surface)
+        if problem:
+            return False, {"reason": "not_yours", "message": problem}
+        until = t + G.TAG_FOR
+        c["tagging"] = {"place": here, "surface": surface, "until": until}
+        c["doing"], c["doing_until"] = f"painting {sname}", until
+        return True, {"result": f"You start painting {sname}.", "until": iso(until)}
 
     def _human_spoke(self, c, t, f, here):
         for o in self.C.values():
@@ -598,6 +830,11 @@ class World:
         tmp.replace(dest)
         for old in sorted(folder.glob("world-*.db"))[:-BACKUPS_KEPT]:
             old.unlink()
+        pics = folder / "marks"         # pictures never change once written, so copying new ones is enough
+        pics.mkdir(exist_ok=True)
+        for f in self.marks_dir.iterdir():
+            if f.suffix in (".jpg", ".png", ".webp") and not (pics / f.name).exists():
+                shutil.copy2(f, pics / f.name)
         return dest
 
 
@@ -617,11 +854,37 @@ def make_handler(world):
             self.end_headers()
             self.wfile.write(data)
 
+        def _page(self):
+            data = MAP_PAGE.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _serve(self, method):
             u = urlparse(self.path)
+            if method == "GET" and u.path in ("/", "/map"):
+                return self._page()
+            pic = G.FILE_PATH.match(u.path) if method == "GET" else None
+            if pic:
+                return self._picture(*pic.groups())
             auth = self.headers.get("Authorization", "")
             token = auth[7:] if auth.startswith("Bearer ") else None
             body = None
+            if method == "PUT":
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    n = -1
+                if n > G.MAX_IMAGE:
+                    self.close_connection = True
+                    return self._reply(413, {"ok": False, "reason": "too_big", "message": "Pictures are at most 256 KB."})
+                if n < 0:
+                    self.close_connection = True
+                    return self._reply(400, {"ok": False, "reason": "bad_request", "message": "Bad Content-Length."})
+                body = self.rfile.read(n)
             if method == "POST":
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
@@ -652,6 +915,22 @@ def make_handler(world):
 
         def do_POST(self):
             self._serve("POST")
+
+        def do_PUT(self):
+            self._serve("PUT")
+
+        def _picture(self, sha, ext):
+            f = world.mark_file(sha, ext)
+            if f is None:
+                return self._reply(404, {"ok": False, "reason": "not_found", "message": "No such picture."})
+            data = f.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", G.CONTENT_TYPES[ext])
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.end_headers()
+            self.wfile.write(data)
 
     return Handler
 

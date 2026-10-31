@@ -12,6 +12,12 @@ The two Claude sessions can't talk to each other. **These files are how you stay
   item unless your human asks.
 - `PROTOCOL.md` (phase 1): the API between the world and every creature. It's the contract.
 
+**While GitHub is down (since 2026-10-29):** there are no pull requests. The repo lives on underworld at
+`/srv/git/shasta-world.git`, and that's what the server deploys from. Changes go on a branch, the other
+owner OKs them, the OK goes in `DECISIONS.md`, then they're merged to `main` and pushed there. Caelan's
+changes come over as a `git bundle` or patch file (Discord) and Elliott's Claude applies them. See
+`DECISIONS.md`, "deploy from underworld while GitHub is down".
+
 ## Rules
 
 1. **The protocol is the contract.** Any change to what a creature can see or do updates

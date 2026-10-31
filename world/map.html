@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Shasta World</title>
+<!--
+  The shared town map, served by the shasta-world server at / and fed by GET /v1/map (read-only, no token).
+  Everything is drawn here in the browser; the server only sends a small JSON update every 5 seconds.
+  The town and bird art come from Bolt's world page (cjmcc855-stack/bolt, world.html); Spike's fir and the
+  jay are additions. It only looks: nothing here can make a creature do anything.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #1d2333; --panel: #f8f4e3; --ink: #2a2a3a; --edge: #3c4a6b; --edge2: #8fa3c8;
+    --hp: #48c060; --hp-mid: #e8c040; --hp-low: #e05038; --accent: #d85a3a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font-family: "Press Start 2P", ui-monospace, monospace; font-size: 10px; line-height: 1.7;
+         display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 10px 10px 90px; }
+  .wrap { width: 100%; max-width: 980px; }
+  .box { background: var(--panel); border: 4px solid var(--edge); border-radius: 6px;
+         box-shadow: inset 0 0 0 3px var(--edge2), 0 4px 0 #0008; padding: 10px 12px; }
+  header.box { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  h1 { font-size: 12px; margin: 0; letter-spacing: 1px; }
+  .stat { display: flex; align-items: center; gap: 6px; }
+  .bar { width: 90px; height: 8px; background: #555; border: 2px solid var(--ink); border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--hp); transition: width .6s, background .6s; }
+  .meta { opacity: .75; }
+  .stage.zoom { overflow: auto; } .stage.zoom canvas { width: 220%; }
+  .stage { position: relative; width: 100%; border: 4px solid var(--edge); border-radius: 6px; overflow: hidden;
+           box-shadow: 0 4px 0 #0008; background: #000; }
+  canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; touch-action: manipulation; }
+  .tag { position: absolute; pointer-events: none; transform: translate(-50%, -130%); background: #000c; color: #fff;
+         padding: 3px 6px; border-radius: 3px; font-size: 8px; white-space: nowrap; display: none; }
+  .dialog { margin-top: 8px; min-height: 72px; position: relative; }
+  .dialog .who { font-size: 9px; color: var(--accent); margin-bottom: 4px; }
+  .dialog p { margin: 0 0 4px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.45; }
+  .dialog .small { font-size: 12px; opacity: .8; }
+  .dialog .arrow { position: absolute; right: 12px; bottom: 6px; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+         padding: 9px 10px; border: 3px solid var(--edge); border-radius: 5px; background: var(--panel); color: var(--ink); }
+  button { font: inherit; font-size: 9px; padding: 9px 10px; border: 3px solid var(--edge); border-radius: 5px;
+           background: #e9e1c4; color: var(--ink); cursor: pointer; box-shadow: 0 3px 0 #0006; white-space: nowrap; }
+  button:active { transform: translateY(2px); box-shadow: 0 1px 0 #0006; }
+  button.go { background: #ffd866; }
+  .sheet { position: fixed; inset: 0; background: #0008; display: none; align-items: flex-end; justify-content: center; z-index: 10; padding: 10px; }
+  .sheet.open { display: flex; }
+  .sheet .box { width: 100%; max-width: 640px; max-height: 80vh; overflow: auto; margin-bottom: 70px; }
+  .sheet h2 { font-size: 11px; margin: 0 0 8px; }
+  .sheet .desc { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.45; margin: 0 0 10px; }
+  ul.list { margin: 0; padding-left: 18px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+  .close { float: right; }
+  @media (max-width: 520px) { button { padding: 9px 7px; font-size: 8px; } .controls .inner { gap: 4px; } }
+           border-radius: 5px; padding: 8px 12px; z-index: 20; display: none; box-shadow: 0 3px 0 #0008; }
+  .offline { color: var(--hp-low); }
+  h3 { font-size: 9px; margin: 14px 0 6px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 8px; }
+  .card { text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; background: var(--panel); white-space: normal; }
+  .card b { font-size: 9px; }
+  .card.crow b { color: #2a2a3a; } .card.jay b { color: #2c5aa0; } .card.gray b { color: #6a6a76; }
+  .card span, .card small, .dialog p, .sheet li { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .card span { font-size: 13px; line-height: 1.35; } .card small { font-size: 11px; opacity: .65; }
+  .dialog p { margin: 0 0 6px; }
+  .when { opacity: .55; font-size: 11px; white-space: nowrap; }
+  .tools { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+  .sheet h3 { font-size: 9px; margin: 12px 0 4px; }
+  /* graffiti: the walls of a place, and a viewer for one piece */
+  .walls { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .wall { display: flex; flex-direction: column; gap: 4px; padding: 6px; text-align: left; white-space: normal;
+          background: #e9e1c4; border: 3px solid var(--edge); border-radius: 5px; font-size: 8px; line-height: 1.5; }
+  button.wall { box-shadow: 0 3px 0 #0006; }
+  .wall img, .wall .bare { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 3px; background: #0002; image-rendering: auto; }
+  .wall .bare { display: flex; align-items: center; justify-content: center; opacity: .7;
+                background: repeating-linear-gradient(45deg, #d8d0b4 0 6px, #e4dcc0 6px 12px);
+                font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .wall small { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; opacity: .75; }
+  .new { background: var(--accent); color: #fff; padding: 1px 4px; border-radius: 3px; font-size: 7px; }
+  .faded { filter: saturate(.45) contrast(.85) brightness(1.08); opacity: .85; }
+  .viewer { position: fixed; inset: 0; background: #000c; display: none; align-items: center; justify-content: center; z-index: 30; padding: 10px; }
+  .viewer.open { display: flex; }
+  .viewer .box { width: 100%; max-width: 820px; max-height: 94vh; overflow: auto; }
+  .viewer h2 { font-size: 11px; margin: 0 0 8px; }
+  .viewer img { display: block; width: 100%; max-height: 64vh; object-fit: contain; background: #111; border-radius: 4px; image-rendering: auto; }
+  .viewer .desc { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.45; margin: 8px 0 0; }
+  button:disabled { opacity: .4; cursor: default; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="box">
+    <h1>SHASTA WORLD</h1>
+    <div class="meta" id="meta">connecting…</div>
+  </header>
+  <div class="stage" id="stage">
+    <canvas id="c" width="768" height="512"></canvas>
+    <div class="tag" id="tag"></div>
+  </div>
+  <div class="cards" id="cards"></div>
+  <div class="box dialog" id="dialog">
+    <div class="who" id="who">TOWN TALK</div>
+    <div id="lines"><p>…</p></div>
+  </div>
+  <div class="tools">
+    <button id="namesBtn" title="Show place names">ABC</button>
+    <button id="zoomBtn" title="Zoom">⌕ ZOOM</button>
+  </div>
+</div>
+
+<div class="sheet" id="placeSheet"><div class="box">
+  <button class="close" data-close>X</button>
+  <h2 id="pName"></h2>
+  <h3>WHO'S HERE</h3><ul class="list" id="pWho"></ul>
+  <h3>LYING AROUND</h3><ul class="list" id="pItems"></ul>
+  <h3 id="pWallsH">ON THE WALLS</h3><div class="walls" id="pWalls"></div>
+  <h3>LATELY</h3><ul class="list" id="pEvents"></ul>
+</div></div>
+
+<div class="viewer" id="viewer"><div class="box">
+  <button class="close" data-vclose>X</button>
+  <h2 id="vTitle"></h2>
+  <img id="vImg" alt="">
+  <p class="desc" id="vCap"></p>
+  <div class="tools"><button id="vOlder">‹ OLDER</button><button id="vNewer">NEWER ›</button></div>
+</div></div>
+
+<script>
+"use strict";
+// ======================= map =======================
+const T = 16, W = 48, H = 32;
+const cv = document.getElementById("c"), cx = cv.getContext("2d");
+cx.imageSmoothingEnabled = false;
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const grid = Array.from({ length: H }, () => Array(W).fill("g"));
+const busy = Array.from({ length: H }, () => Array(W).fill(false));
+const set = (x, y, t) => { if (x >= 0 && y >= 0 && x < W && y < H) grid[y][x] = t; };
+const rect = (x0, y0, x1, y1, t) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, t); };
+const occupy = (x0, y0, x1, y1) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (busy[y]) busy[y][x] = true; };
+
+// mountain
+for (let y = 0; y <= 11; y++) {
+  const hw = 3 + y * 1.25, cxm = 24;
+  for (let x = Math.floor(cxm - hw); x <= Math.ceil(cxm + hw); x++) {
+    const edge = Math.abs(x - cxm) > hw - 1 && rnd() < .5;
+    set(x, y, edge ? "g" : "r");
+  }
+  if (y < 6) { const sw = 1.5 + y * 0.9; for (let x = Math.floor(cxm - sw); x <= Math.ceil(cxm + sw); x++) set(x, y, "s"); }
+}
+occupy(8, 0, 40, 11);
+// switchback trail up the mountain
+[[24,12],[24,11],[23,11],[22,11],[21,11],[21,10],[21,9],[22,9],[23,9],[24,9],[25,9],[26,9],[26,8],[26,7],[25,7],[24,7],[23,7],[22,7],[22,6],[22,5],[23,5],[24,5],[24,4],[24,3],[24,2]]
+  .forEach(([x, y]) => set(x, y, grid[y][x] === "s" ? "S" : "d"));
+// lake + river
+for (let y = 2; y <= 12; y++) for (let x = 34; x <= 47; x++) {
+  const d = ((x - 41) / 5.6) ** 2 + ((y - 7) / 3.8) ** 2;
+  if (d < 1) set(x, y, "w"); else if (d < 1.35) set(x, y, "m");
+}
+occupy(34, 2, 47, 12);
+let rx = 41;
+for (let y = 10; y < H; y++) {
+  rx += (rnd() < .35 ? 1 : rnd() < .25 ? -1 : 0); rx = Math.max(40, Math.min(45, rx));
+  set(rx - 1, y, "m"); set(rx, y, "w"); set(rx + 1, y, "w"); set(rx + 2, y, "m"); occupy(rx - 1, y, rx + 2, y);
+}
+// railway + rail yard
+for (let x = 0; x < W; x++) set(x, 20, grid[20][x] === "w" ? "b" : "t");
+for (const y of [18, 22]) for (let x = 29; x <= 38; x++) set(x, y, "t");
+for (const y of [19, 21]) for (let x = 29; x <= 38; x++) set(x, y, "q");
+occupy(0, 20, 47, 20); occupy(28, 17, 39, 23);
+// roads
+for (let x = 0; x <= 39; x++) set(x, 25, "d");
+for (let y = 12; y <= 25; y++) if (grid[y][24] !== "t") set(24, y, "d");
+for (let y = 7; y <= 25; y++) if (grid[y][7] !== "t") set(7, y, "d");
+for (let x = 7; x <= 24; x++) set(x, 12, "d");
+occupy(0, 25, 39, 25); occupy(24, 12, 24, 25); occupy(7, 7, 7, 25); occupy(7, 12, 24, 12);
+// drift lot, junkyard, concrete pads
+rect(1, 13, 12, 18, "a"); occupy(1, 13, 12, 18);
+rect(1, 27, 12, 31, "j"); occupy(0, 26, 13, 31);
+rect(29, 26, 36, 31, "c"); occupy(28, 26, 37, 31);
+rect(13, 21, 19, 24, "c"); rect(13, 26, 19, 31, "c"); occupy(13, 21, 19, 31);
+rect(20, 26, 27, 31, "c"); occupy(20, 26, 27, 31);
+// barn pasture
+rect(1, 1, 8, 7, "p"); occupy(0, 0, 9, 8);
+// house + shed
+occupy(13, 13, 21, 17);
+// nest tree spot
+occupy(22, 13, 26, 18);
+// Spike's fir (shasta-world)
+occupy(0, 8, 6, 12);
+
+// ======================= tiles =======================
+const base = document.createElement("canvas"); base.width = W * T; base.height = H * T;
+const b = base.getContext("2d");
+const px = (g, x, y, w, h, c) => { g.fillStyle = c; g.fillRect(x, y, w, h); };
+function speckle(g, x0, y0, cols, n) { for (let i = 0; i < n; i++) px(g, x0 + (rnd() * T | 0), y0 + (rnd() * T | 0), 1, 1, cols[rnd() * cols.length | 0]); }
+const TILE = {
+  g(g, x, y) { px(g, x, y, T, T, "#5aa848"); speckle(g, x, y, ["#4c9a3e", "#68b854", "#4c9a3e"], 14);
+               if (rnd() < .18) { const a = x + 3 + (rnd() * 9 | 0), c = y + 4 + (rnd() * 8 | 0); px(g, a, c, 1, 2, "#3f8a34"); px(g, a + 2, c - 1, 1, 3, "#3f8a34"); }
+               if (rnd() < .05) { px(g, x + 6, y + 6, 2, 2, rnd() < .5 ? "#f4e36a" : "#f08aa8"); } },
+  p(g, x, y) { px(g, x, y, T, T, "#8cbf52"); speckle(g, x, y, ["#7cb046", "#9ccc60"], 12); },
+  d(g, x, y) { px(g, x, y, T, T, "#c9a46a"); speckle(g, x, y, ["#b8935c", "#d8b47a", "#a88350"], 16); },
+  S(g, x, y) { px(g, x, y, T, T, "#d8dce8"); speckle(g, x, y, ["#c4c8d8", "#b8a888"], 10); },
+  r(g, x, y) { px(g, x, y, T, T, "#8a8a96"); speckle(g, x, y, ["#7a7a86", "#9a9aa6", "#6c6c78"], 20);
+               if (rnd() < .4) { const a = x + (rnd() * 10 | 0), c = y + (rnd() * 10 | 0); px(g, a, c, 5, 1, "#62626e"); px(g, a + 4, c + 1, 1, 3, "#62626e"); } },
+  s(g, x, y) { px(g, x, y, T, T, "#f4f6fb"); speckle(g, x, y, ["#dce4f2", "#ffffff", "#cfd9ec"], 14); },
+  w(g, x, y) { px(g, x, y, T, T, "#3c78c8"); speckle(g, x, y, ["#3570bc", "#4686d4"], 10); },
+  m(g, x, y) { px(g, x, y, T, T, "#dcc890"); speckle(g, x, y, ["#ccb880", "#e8d8a4"], 12); },
+  a(g, x, y) { px(g, x, y, T, T, "#4a4a52"); speckle(g, x, y, ["#3e3e46", "#56565e", "#5e5e66"], 18); },
+  c(g, x, y) { px(g, x, y, T, T, "#b4b0a4"); speckle(g, x, y, ["#a8a498", "#c0bcb0"], 10); px(g, x, y + 15, T, 1, "#a09c90"); px(g, x + 15, y, 1, T, "#a09c90"); },
+  j(g, x, y) { px(g, x, y, T, T, "#9a8060"); speckle(g, x, y, ["#8a7050", "#aa9070", "#6a5a48", "#b07040"], 22); },
+  q(g, x, y) { px(g, x, y, T, T, "#9a9488"); speckle(g, x, y, ["#8a8478", "#aaa498", "#7a7468"], 26); },
+  t(g, x, y) { TILE.q(g, x, y); for (let i = 1; i < T; i += 4) px(g, x + i, y + 3, 2, 10, "#6a4a30"); px(g, x, y + 5, T, 2, "#c8c8d0"); px(g, x, y + 10, T, 2, "#c8c8d0"); px(g, x, y + 7, T, 1, "#80808a"); px(g, x, y + 12, T, 1, "#80808a"); },
+  b(g, x, y) { TILE.w(g, x, y); px(g, x, y + 2, T, 12, "#7a5a3a"); for (let i = 0; i < T; i += 4) px(g, x + i, y + 2, 1, 12, "#5a3a22"); px(g, x, y + 5, T, 2, "#c8c8d0"); px(g, x, y + 10, T, 2, "#c8c8d0"); },
+};
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) (TILE[grid[y][x]] || TILE.g)(b, x * T, y * T);
+// mountain shading: light from the west, shadowed east face, ragged snowline
+for (let y = 0; y <= 11; y++) for (let x = 8; x <= 40; x++) {
+  const t = grid[y][x];
+  if (t === "r" || t === "s" || t === "S" || (t === "d" && y < 12 && grid[y][x - 1] === "r")) {
+    if (x > 24) { b.globalAlpha = 0.18 + (x - 24) * 0.012; px(b, x * T, y * T, T, T, t === "s" ? "#6a7ab0" : "#1a1a2a"); b.globalAlpha = 1; }
+    else if (x < 23) { b.globalAlpha = 0.08; px(b, x * T, y * T, T, T, "#ffffff"); b.globalAlpha = 1; }
+  }
+  if (t === "s" && y < H - 1 && grid[y + 1][x] === "r") for (let i = 0; i < T; i += 3) px(b, x * T + i, (y + 1) * T, 2, 2 + (rnd() * 5 | 0), "#eef2fa");
+}
+// shoreline edges
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x] === "w") {
+  if (y > 0 && grid[y - 1][x] !== "w" && grid[y - 1][x] !== "b") px(b, x * T, y * T, T, 2, "#8cc4f0");
+}
+
+// ======================= objects =======================
+function pine(g, x, y, s = 1) {
+  px(g, x + 6 * s, y + 18 * s, 4 * s, 5 * s, "#6a4428");
+  const L = [[7, 0, 2], [5, 3, 6], [4, 6, 8], [2, 9, 12], [1, 12, 14], [0, 15, 16]];
+  L.forEach(([ox, oy, w]) => px(g, x + ox * s, y + oy * s, w * s, 3 * s, "#2f6b3a"));
+  L.forEach(([ox, oy, w]) => px(g, x + ox * s, y + oy * s, Math.max(1, (w / 3) | 0) * s, 3 * s, "#3e8a4a"));
+  px(g, x + 3 * s, y + 21 * s, 10 * s, 2 * s, "#0002");
+}
+function building(g, x, y, w, h, wall, roof, opt = {}) {
+  px(g, x + 2, y + h, w, 3, "#0003");
+  px(g, x, y + 8, w, h - 8, wall); px(g, x, y + h - 2, w, 2, "#0002");
+  px(g, x - 2, y, w + 4, 10, roof); px(g, x - 2, y + 8, w + 4, 2, "#0003");
+  for (let i = 0; i < w + 4; i += 4) px(g, x - 2 + i, y + 2, 2, 1, "#ffffff22");
+  (opt.windows || []).forEach(([wx, wy]) => { px(g, x + wx, y + wy, 6, 5, "#2a3a5a"); px(g, x + wx + 1, y + wy + 1, 2, 2, "#8ab4e8"); });
+  if (opt.door) { const [dx, dw] = opt.door; px(g, x + dx, y + h - 12, dw, 12, opt.doorColor || "#6a4428"); }
+}
+function car(g, x, y, col, rust) {
+  px(g, x + 1, y + 9, 22, 2, "#0004");
+  px(g, x, y + 3, 22, 6, col); px(g, x + 5, y, 12, 4, col); px(g, x + 6, y + 1, 4, 2, "#8ab4e8"); px(g, x + 11, y + 1, 4, 2, "#8ab4e8");
+  px(g, x + 3, y + 8, 4, 3, "#222"); px(g, x + 15, y + 8, 4, 3, "#222");
+  if (rust) for (let i = 0; i < 8; i++) px(g, x + (rnd() * 20 | 0), y + 3 + (rnd() * 5 | 0), 2, 1, "#a0582a");
+}
+function fence(g, x0, y0, x1, y1) {
+  for (let x = x0; x <= x1; x += 4) { px(g, x, y0, 2, 6, "#8a6a44"); px(g, x, y1, 2, 6, "#8a6a44"); }
+  for (let y = y0; y <= y1; y += 4) { px(g, x0, y, 2, 6, "#8a6a44"); px(g, x1, y, 2, 6, "#8a6a44"); }
+  px(g, x0, y0 + 2, x1 - x0, 1, "#a8885c"); px(g, x0, y1 + 2, x1 - x0, 1, "#a8885c");
+}
+// barn (old red barn, NW)
+building(b, 2 * T, 2 * T, 5 * T, 4 * T - 4, "#a83c30", "#5a3a2a", { door: [28, 24], doorColor: "#7a2a22" });
+px(b, 2 * T + 28, 2 * T + 44, 24, 12, "#7a2a22"); px(b, 2 * T + 28, 2 * T + 44, 24, 1, "#f0e8d8");
+for (let i = 0; i < 12; i++) { px(b, 2 * T + 28 + i * 2, 2 * T + 44 + i, 2, 1, "#f0e8d8"); px(b, 2 * T + 50 - i * 2, 2 * T + 44 + i, 2, 1, "#f0e8d8"); }
+px(b, 2 * T + 34, 2 * T + 12, 12, 8, "#f0e8d8"); px(b, 2 * T + 36, 2 * T + 14, 8, 4, "#3a2a20");
+fence(b, 1 * T, 1 * T, 8 * T + 8, 7 * T + 6);
+// drift lot: tire marks + light poles
+b.strokeStyle = "#2a2a30"; b.lineWidth = 2;
+for (let k = 0; k < 3; k++) { b.beginPath(); b.ellipse(6.5 * T, 15.5 * T, 3.6 * T - k * 6, 1.8 * T - k * 4, 0, 0, Math.PI * 2); b.stroke(); }
+for (const [x, y] of [[1, 13], [12, 13], [1, 18], [12, 18]]) { px(b, x * T + 6, y * T, 3, 14, "#6a6a72"); px(b, x * T + 3, y * T, 9, 3, "#d8d8e0"); }
+// junkyard: fence + wrecks + tire stacks
+fence(b, 1 * T - 6, 27 * T - 8, 12 * T + 12, 31 * T + 8);
+[["#7a8a9a", 1], ["#8a4a3a", 1], ["#4a6a4a", 1], ["#9a8a5a", 1], ["#5a5a7a", 1], ["#8a8a8a", 1]].forEach(([c, r], i) =>
+  car(b, (1.4 + (i % 3) * 3.4) * T, (27.5 + (i / 3 | 0) * 2) * T, c, r));
+for (let i = 0; i < 3; i++) { px(b, 11 * T, 28 * T + i * 5, 10, 5, "#222"); px(b, 11 * T + 3, 28 * T + i * 5 + 1, 4, 3, "#555"); }
+// garage (busted roll-up door) + machine shop
+building(b, 13.5 * T, 21 * T, 5 * T, 3 * T, "#8a9aa8", "#4a5a6a", { windows: [[6, 18]] });
+px(b, 13.5 * T + 30, 21 * T + 20, 40, 28, "#5a6570"); for (let i = 0; i < 28; i += 3) px(b, 13.5 * T + 30, 21 * T + 20 + i, 40, 1, "#707c88");
+px(b, 13.5 * T + 30, 21 * T + 40, 18, 8, "#1a1a20");
+building(b, 13.5 * T, 26.5 * T, 5 * T, 3.5 * T, "#9a8a78", "#5a4a3a", { windows: [[8, 22], [26, 22], [44, 22]], door: [62, 12] });
+px(b, 13.5 * T + 20, 26.5 * T + 2, 8, 6, "#6a6a6a"); // chimney-ish vent
+// diner
+building(b, 20.5 * T, 26.5 * T, 7 * T, 3.5 * T, "#e8dcc0", "#c84a3a", { windows: [[8, 22], [22, 22], [36, 22], [72, 22], [86, 22]], door: [52, 14], doorColor: "#4a6a8a" });
+for (let i = 0; i < 7 * T + 4; i += 8) px(b, 20.5 * T - 2 + i, 26.5 * T, 4, 10, "#f0e8d8");
+px(b, 20.5 * T + 30, 26.5 * T + 12, 52, 9, "#2a2a3a");
+// ambulance station
+building(b, 29 * T, 26.3 * T, 7 * T, 2.6 * T, "#d8d8dc", "#3a4a6a", { windows: [[8, 16], [92, 16]] });
+for (const ox of [28, 58]) { px(b, 29 * T + ox, 26.3 * T + 16, 24, 26, "#4a5260"); for (let i = 0; i < 24; i += 3) px(b, 29 * T + ox, 26.3 * T + 16 + i, 24, 1, "#5a6270"); }
+function ambulance(g, x, y) { px(g, x + 1, y + 13, 30, 3, "#0004"); px(g, x, y + 2, 22, 11, "#f4f4f4"); px(g, x + 22, y + 5, 9, 8, "#f4f4f4");
+  px(g, x + 24, y + 6, 5, 3, "#8ab4e8"); px(g, x, y + 8, 31, 2, "#d83a2a"); px(g, x + 8, y, 6, 2, "#e84a3a"); px(g, x + 4, y + 12, 5, 4, "#222"); px(g, x + 22, y + 12, 5, 4, "#222"); }
+ambulance(b, 29.6 * T, 29.2 * T); ambulance(b, 32.4 * T, 29.4 * T);
+// house + shed (backyard)
+building(b, 13.5 * T, 13 * T, 4 * T, 3 * T, "#c8b48a", "#6a7a4a", { windows: [[8, 18], [42, 18]], door: [26, 10] });
+building(b, 18.6 * T, 14.4 * T, 2.2 * T, 1.8 * T, "#8a8a90", "#5a5a62", { door: [12, 10], doorColor: "#3a3a40" });
+fence(b, 13 * T, 12.7 * T, 21.4 * T, 16.9 * T);
+// rail yard: boxcars parked
+function boxcar(g, x, y, col) { px(g, x, y, 30, 10, col); px(g, x, y, 30, 2, "#ffffff22"); for (let i = 3; i < 30; i += 6) px(g, x + i, y + 2, 1, 8, "#0002");
+  px(g, x + 3, y + 10, 4, 3, "#222"); px(g, x + 23, y + 10, 4, 3, "#222"); }
+boxcar(b, 30 * T, 18 * T + 1, "#8a4a2a"); boxcar(b, 32 * T, 18 * T + 1, "#4a6a8a"); boxcar(b, 35 * T, 22 * T + 1, "#6a6a3a");
+// river canyon rocks
+for (let y = 22; y < 31; y += 2) { px(b, 39 * T + (rnd() * 6 | 0), y * T + 4, 6, 4, "#7a7a86"); px(b, 46 * T - (rnd() * 6 | 0), y * T + 8, 6, 4, "#7a7a86"); }
+// dead pine with nest (Bolt's home)
+(function nestTree(g, x, y) {
+  px(g, x + 6, y + 30, 24, 4, "#0003");
+  px(g, x + 15, y + 4, 5, 30, "#6a5040"); px(g, x + 16, y + 4, 1, 30, "#8a6a54");
+  [[4, 10, 12], [20, 12, 11], [6, 18, 10], [20, 20, 10], [8, 26, 8], [19, 26, 9]].forEach(([bx, by, w]) => px(g, x + bx, y + by, w, 2, "#6a5040"));
+  px(g, x + 9, y, 18, 6, "#8a6a40"); px(g, x + 10, y + 1, 16, 2, "#a8885a"); for (let i = 0; i < 18; i += 3) px(g, x + 9 + i, y + 5, 2, 2, "#6a5030");
+})(b, 22.4 * T, 13.2 * T);
+// scattered pine forest (avoid structures)
+for (let i = 0; i < 260; i++) {
+  const x = rnd() * W | 0, y = rnd() * H | 0;
+  if (grid[y][x] !== "g" || busy[y][x]) continue;
+  if (y + 1 < H && grid[y + 1][x] !== "g") continue;
+  busy[y][x] = true; pine(b, x * T - 2, y * T - 10, 1);
+}
+// summit flag
+px(b, 24 * T + 7, 0 * T + 6, 1, 10, "#5a4a3a"); px(b, 24 * T + 8, 0 * T + 6, 6, 4, "#e84a3a");
+// Spike's fir: a tall red fir at the west edge of town, below the barn (shasta-world addition)
+(function firTree(g, x, y) {
+  px(g, x + 10, y + 58, 30, 4, "#0003");
+  px(g, x + 22, y + 44, 7, 16, "#7a3a24"); px(g, x + 23, y + 44, 2, 16, "#9a5a3a");
+  const L = [[22, 0, 6], [19, 6, 12], [16, 12, 18], [13, 18, 24], [10, 24, 30], [8, 30, 34], [5, 36, 40], [2, 42, 46]];
+  L.forEach(([ox, oy, w]) => px(g, x + ox, y + oy, w, 6, "#1f4a34"));
+  L.forEach(([ox, oy, w]) => px(g, x + ox, y + oy, Math.max(2, (w / 3) | 0), 6, "#2c6646"));
+  L.forEach(([ox, oy, w]) => px(g, x + ox, y + oy + 5, w, 1, "#16382a"));
+  for (const [cx_, cy_] of [[14, 33], [34, 27], [9, 45], [38, 44]]) { px(g, x + cx_, y + cy_, 3, 4, "#8a5a2a"); px(g, x + cx_, y + cy_, 3, 1, "#a8743a"); }
+})(b, 1.1 * T, 8.6 * T);
+pine(b, 5.2 * T, 10.3 * T, 1); pine(b, 0.1 * T, 10.9 * T, 1);
+
+// ======================= places =======================
+const P = {
+  nest:              { x: 24.6, y: 13.4, r: [22, 13, 26, 17], name: "Bolt's Nest" },
+  fir:               { x: 3.2,  y: 10.7, r: [0, 8, 6, 12], name: "Spike's Fir" },
+  junkyard:          { x: 6.5,  y: 28.5, r: [1, 27, 12, 31], name: "Junkyard" },
+  rail_yard:         { x: 33.5, y: 20.2, r: [28, 17, 39, 23], name: "Rail Yard" },
+  creek:             { x: 42,   y: 26,   r: [39, 21, 47, 31], name: "River Canyon" },
+  garage:            { x: 16,   y: 21.6, r: [13, 21, 19, 24], name: "Old Garage" },
+  diner_roof:        { x: 24,   y: 26.8, r: [20, 26, 27, 30], name: "Diner Roof" },
+  ambulance_station: { x: 32.5, y: 26.8, r: [28, 26, 36, 31], name: "Ambulance Station" },
+  drift_lot:         { x: 6.5,  y: 15.4, r: [1, 13, 12, 18], name: "Drift Lot" },
+  lake:              { x: 39.5, y: 6.5,  r: [34, 2, 47, 12], name: "The Lake" },
+  shed:              { x: 19.7, y: 14.6, r: [18, 13, 21, 17], name: "The Shed" },
+  mountain_trail:    { x: 22.5, y: 6.8,  r: [17, 4, 30, 11], name: "Mountain Trail" },
+  old_barn:          { x: 4.5,  y: 2.6,  r: [1, 1, 8, 7], name: "The Old Barn" },
+  machine_shop:      { x: 16,   y: 27.2, r: [13, 26, 19, 31], name: "Machine Shop" },
+  summit:            { x: 24.3, y: 1.6,  r: [20, 0, 28, 3], name: "The Summit" },
+};
+const placeAt = (tx, ty) => {
+  // smallest matching rectangle wins (summit inside trail, shed inside house yard, etc.)
+  let best = null, area = 1e9;
+  for (const [k, p] of Object.entries(P)) { const [x0, y0, x1, y1] = p.r;
+    if (tx >= x0 && tx <= x1 + 1 && ty >= y0 && ty <= y1 + 1) { const a = (x1 - x0 + 1) * (y1 - y0 + 1); if (a < area) { area = a; best = k; } } }
+  return best;
+};
+
+// ======================= bird pixels (Bolt's) =======================
+const PAL = { K: "#16161f", k: "#2c3456", B: "#4a4a52", W: "#ffffff", O: "#8a8a92", Y: "#e8c840" };
+const SPR = {
+  perch: [
+    "......KK......",
+    ".....KKKK.....",
+    "....KKkKWBB...",
+    "....KKKKKBBB..",
+    "...KKKKKKK....",
+    "..KKkKKKKKK...",
+    ".KKKkkKKKKK...",
+    "KKKKKkKKKKK...",
+    ".KK.KKKKKK....",
+    ".....K..K.....",
+    ".....O..O.....",
+  ],
+  up: [
+    "K..............K",
+    "KK............KK",
+    ".KKk...KK...kKK.",
+    "..KKk.KKKK.kKK..",
+    "...KKKKkKWBBK...",
+    "....KKKKKKBBB...",
+    ".....KKKKKK.....",
+    "....KK.KK.......",
+  ],
+  down: [
+    "................",
+    "......KK........",
+    ".....KKKKWBB....",
+    "...KKKkKKKBBB...",
+    ".KKKKKKKKKKKKK..",
+    "KKk..KKKKKK..kKK",
+    "K.....KKKK.....K",
+    "......K..K......",
+  ],
+};
+function sprite(name, flip) {
+  // 2x scale with a pale 1px outline so he reads on any background
+  const rows = SPR[name], h = rows.length, w = rows[0].length, Z = 2, c = document.createElement("canvas");
+  c.width = (w + 2) * Z; c.height = (h + 2) * Z; const g = c.getContext("2d");
+  const at = (x, y) => (y >= 0 && y < h && x >= 0 && x < w) ? PAL[rows[y][flip ? w - 1 - x : x]] : null;
+  for (let y = -1; y <= h; y++) for (let x = -1; x <= w; x++)
+    if (!at(x, y) && (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1))) px(g, (x + 1) * Z, (y + 1) * Z, Z, Z, "#f4f0e0");
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const col = at(x, y); if (col) px(g, (x + 1) * Z, (y + 1) * Z, Z, Z, col); }
+  return c;
+}
+const S = { perch: [sprite("perch"), sprite("perch", 1)], up: [sprite("up"), sprite("up", 1)], down: [sprite("down"), sprite("down", 1)] };
+
+const IPAL = { k: "#2a2a3a", b: "#4a86d4", B: "#2c5aa0", s: "#a8d4f8", r: "#d85a3a", y: "#e8c040", g: "#8a8a96", w: "#ffffff", n: "#8a6a44", p: "#c8a46a", G: "#48c060" };
+const ICONS = {
+  fish:  ["...bbb..", "b.bsbbb.", "bbbbbkbb", "b.bbbbb.", "...bbb.."],
+  sift:  ["..r..s..", ".rrr....", "rrwrr.s.", ".rrr....", "..r..s.."],
+  dig:   ["....gg..", "...ggg..", "..n.g...", ".n......", "n......."],
+  tinker:["gg...gg.", ".gg.gg..", "..ggg...", ".gg.gg..", "gg...gg."],
+  penny_on_tracks: ["..yyy...", ".yyyyy..", ".yykyy..", ".yyyyy..", "..yyy..."],
+  read:  ["nnn.nnn.", "nwwnwwn.", "nwwnwwn.", "nwwnwwn.", "nnnnnnn."],
+  look_up: [".kkk....", "k.s.k...", "k...k...", ".kkkk...", "....kk.."],
+  make_music: ["..kkkkk.", "..k...k.", "..k...k.", "kkk.kkk.", "kk..kk.."],
+  draw:  ["......r.", ".....rr.", "....yy..", "...yy...", "kkk....."],
+  scavenge: ["..y.....", ".yyy....", "..y..y..", "....yyy.", ".....y.."],
+};
+
+// ======================= the birds =======================
+// Bolt is drawn as Bolt's page always drew him; Spike gets the same shapes as a Steller's jay (black crested
+// head, blue body); any other creature is a gray bird.
+const LOOK = { bolt: "crow", spike: "jay" };
+const MARK = { crow: "#ffd866", jay: "#8ac4ff", gray: "#e0e0e8" };
+const JAY = { head: { K: "#16161f", k: "#2c3456" }, body: { K: "#3a6ccc", k: "#22479a" } };
+const GRAY = { K: "#707080", k: "#55555f", B: "#e8c840", W: "#ffffff", O: "#8a8a92" };
+function birdSprite(name, flip, kind) {
+  let rows = SPR[name];
+  if (kind === "jay" && name === "perch") rows = ["......K.......", ...rows];        // the crest
+  const h = rows.length, w = rows[0].length, Z = 2, c = document.createElement("canvas");
+  let ey = 0, ex = 0;
+  rows.forEach((r, y) => { const i = r.indexOf("W"); if (i >= 0) { ey = y; ex = i; } });
+  const at = (x, y) => {
+    if (!(y >= 0 && y < h && x >= 0 && x < w)) return null;
+    const ux = flip ? w - 1 - x : x, ch = rows[y][ux];
+    if (ch === ".") return null;
+    if (kind === "crow") return PAL[ch];
+    if (kind === "gray") return GRAY[ch] || PAL[ch];
+    const head = ux >= ex - 3 && ux <= ex + 3 && y >= ey - 3 && y <= ey + 1;
+    return (head ? JAY.head : JAY.body)[ch] || (ch === "B" ? "#2a2a30" : PAL[ch]);
+  };
+  c.width = (w + 2) * Z; c.height = (h + 2) * Z; const g = c.getContext("2d");
+  for (let y = -1; y <= h; y++) for (let x = -1; x <= w; x++)
+    if (!at(x, y) && (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1))) px(g, (x + 1) * Z, (y + 1) * Z, Z, Z, "#f4f0e0");
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const col = at(x, y); if (col) px(g, (x + 1) * Z, (y + 1) * Z, Z, Z, col); }
+  return c;
+}
+const birds = {};
+function birdFor(c) {
+  if (!birds[c.id]) {
+    const kind = LOOK[c.id] || "gray", sp = n => [birdSprite(n, 0, kind), birdSprite(n, 1, kind)];
+    birds[c.id] = { id: c.id, kind, S: { perch: sp("perch"), up: sp("up"), down: sp("down") },
+                    x: 0, y: 0, gy: 0, fromX: 0, fromY: 0, toX: 0, toY: 0, t0: 0, dur: 0, facing: 0, at: null };
+  }
+  return birds[c.id];
+}
+function spot(c, all) {        // where a creature sits: its place, nudged sideways when it has company
+  const p = P[c.place] || P[c.home] || P.nest, same = all.filter(o => o.place === c.place), i = same.indexOf(c);
+  return [p.x * T + (i - (same.length - 1) / 2) * 24, p.y * T];
+}
+function flyTo(bd, tx, ty, instant) {
+  if (instant || bd.at === null) { Object.assign(bd, { x: tx, y: ty, gy: ty, toX: tx, toY: ty, dur: 0 }); return; }
+  if (tx === bd.toX && ty === bd.toY) return;
+  const dist = Math.hypot(tx - bd.x, ty - bd.y);
+  Object.assign(bd, { fromX: bd.x, fromY: bd.y, toX: tx, toY: ty, t0: performance.now(), dur: Math.max(900, dist * 6) });
+  bd.facing = tx < bd.x ? 1 : 0;
+}
+const DOING_ICONS = [[/fish/, "fish"], [/sift|gravel/, "sift"], [/dig/, "dig"], [/tinker|apart/, "tinker"],
+                     [/read|look(ing)? (something )?up/, "read"], [/paint|draw/, "draw"], [/music|song|synth/, "make_music"],
+                     [/scaveng|shiny|forag|raid|hunting/, "scavenge"], [/penny/, "penny_on_tracks"]];
+const iconFor = doing => { for (const [re, k] of DOING_ICONS) if (doing && re.test(doing)) return k; return null; };
+
+// ======================= live state =======================
+let state = null, online = false, polledAt = 0;
+let showNames = true;
+try { showNames = localStorage.getItem("shasta_names") !== "0"; } catch {}
+const waterTiles = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (grid[y][x] === "w") waterTiles.push([x, y]);
+let train = { x: -400, next: performance.now() + 8000 };
+const puffs = [];
+const sinceSeconds = () => (Date.now() - polledAt) / 1000;
+
+// ======================= render loop =======================
+function nightAmount(h) { if (h >= 7 && h <= 18) return 0; if (h > 18 && h < 21) return (h - 18) / 3; if (h >= 5 && h < 7) return (7 - h) / 2; return 1; }
+function wrapText(text, n, lines) {
+  const out = []; let cur = "";
+  for (const word of text.split(/\s+/)) {
+    if ((cur + " " + word).trim().length > n) { out.push(cur); cur = word; } else cur = (cur + " " + word).trim();
+    if (out.length === lines) break;
+  }
+  if (out.length < lines && cur) out.push(cur);
+  if (out.join(" ").length < text.length) out[out.length - 1] = out[out.length - 1].slice(0, n - 1) + "…";
+  return out;
+}
+function drawBird(c, now, t) {
+  const bd = birdFor(c);
+  let flying = false;
+  if (bd.dur) { const k = Math.min(1, (now - bd.t0) / bd.dur), e = k < .5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+    bd.x = bd.fromX + (bd.toX - bd.fromX) * e; bd.gy = bd.fromY + (bd.toY - bd.fromY) * e; bd.y = bd.gy - Math.sin(k * Math.PI) * 40;
+    flying = k < 1; if (!flying) bd.dur = 0; }
+  const quiet = c.state === "quiet", asleep = c.state === "asleep";
+  if (quiet) cx.globalAlpha = .45;
+  const hop = flying || asleep ? 0 : (Math.sin(t * 2 + bd.x) > 0.95 ? -2 : 0);
+  const sh = cx.globalAlpha; cx.globalAlpha = sh * (flying ? .25 : .3);
+  px(cx, bd.x - 9, (flying ? bd.gy : bd.y) + 11, 18, 3, "#000"); cx.globalAlpha = sh;
+  const spr = flying ? ((now / 120 | 0) % 2 ? bd.S.up : bd.S.down)[bd.facing] : bd.S.perch[bd.facing];
+  cx.drawImage(spr, Math.round(bd.x - spr.width / 2), Math.round(bd.y - spr.height + 12 + hop));
+  cx.globalAlpha = 1;
+  if (!flying && !quiet) { const my = bd.y - spr.height + 2 + Math.sin(t * 4 + bd.x) * 2, col = MARK[bd.kind];
+    px(cx, bd.x - 3, my - 6, 7, 2, col); px(cx, bd.x - 2, my - 4, 5, 2, col); px(cx, bd.x - 1, my - 2, 3, 2, col); }
+  const spraying = c.tagging && !flying && !asleep && !quiet;
+  if (spraying) drawSpray(bd, t);
+  const ic = !spraying && !flying && !asleep && !quiet && ICONS[iconFor(c.doing)];
+  if (ic) { const ix = Math.round(bd.x + 12), iy = Math.round(bd.y - 30 + Math.sin(t * 3) * 1.5);
+    px(cx, ix - 2, iy - 2, ic[0].length * 2 + 4, ic.length * 2 + 4, "#f8f4e3"); px(cx, ix - 2, iy + ic.length * 2 + 2, ic[0].length * 2 + 4, 1, "#3c4a6b");
+    ic.forEach((row, y) => [...row].forEach((ch, x) => { if (IPAL[ch]) px(cx, ix + x * 2, iy + y * 2, 2, 2, IPAL[ch]); })); }
+  if (asleep && !flying) { const zt = (t % 3) / 3; cx.globalAlpha = 1 - zt; cx.fillStyle = "#ffffff"; cx.font = "8px 'Press Start 2P', monospace";
+    cx.fillText("z", bd.x + 6 + zt * 8, bd.y - 10 - zt * 16); cx.fillText("Z", bd.x + 12 + zt * 10, bd.y - 18 - zt * 20); cx.globalAlpha = 1; }
+}
+function drawBubble(c, line, taken) {
+  const bd = birds[c.id]; if (!bd) return;
+  cx.font = "7px 'Press Start 2P', monospace";
+  const rows = wrapText(line.text, 24, 3), wdt = Math.max(...rows.map(r => cx.measureText(r).width)) + 10, ht = rows.length * 10 + 6;
+  let bx = Math.round(bd.x - wdt / 2), by = Math.round(bd.y - 46 - ht);
+  bx = Math.max(2, Math.min(W * T - wdt - 2, bx));
+  for (const r of taken)       // two birds talking at one place: stack the bubbles instead of overlapping them
+    if (bx < r[0] + r[2] + 4 && r[0] < bx + wdt + 4 && by < r[1] + r[3] + 4 && r[1] < by + ht + 4) by = r[1] - ht - 10;
+  by = Math.max(2, by); taken.push([bx, by, wdt, ht]);
+  px(cx, bx - 2, by - 2, wdt + 4, ht + 4, "#3c4a6b"); px(cx, bx, by, wdt, ht, "#f8f4e3");
+  px(cx, Math.round(bd.x) - 2, by + ht + 2, 4, 4, "#3c4a6b"); px(cx, Math.round(bd.x) - 1, by + ht, 2, 4, "#f8f4e3");
+  cx.fillStyle = "#2a2a3a"; rows.forEach((r, i) => cx.fillText(r, bx + 5, by + 11 + i * 10));
+}
+function draw(now) {
+  cx.drawImage(base, 0, 0);
+  const t = now / 1000;
+  for (const [x, y] of waterTiles) { const k = (x * 7 + y * 13 + (t * 2 | 0)) % 9; if (k < 2) px(cx, x * T + ((x * 5 + y * 3) % 10), y * T + 5 + k * 4, 4, 1, "#a8d4f8"); }
+  px(cx, 20.5 * T + 32, 26.5 * T + 14, 48, 5, Math.sin(t * 3) > -0.3 ? "#ff6a8a" : "#5a2a3a");
+  { const a = t * 0.9, ex = 6.5 * T + Math.cos(a) * 3.3 * T, ey = 15.5 * T + Math.sin(a) * 1.6 * T;
+    cx.save(); cx.translate(ex, ey); cx.rotate(a + Math.PI / 2 + 0.5);
+    px(cx, -10, -5, 20, 10, "#f2f2f2"); px(cx, -4, -4, 8, 8, "#cfd8e4"); px(cx, -3, -3, 6, 6, "#5a7090"); px(cx, -10, -5, 2, 10, "#d83a2a"); cx.restore();
+    if (Math.random() < .5) puffs.push({ x: ex, y: ey, life: 1 }); }
+  for (let i = puffs.length - 1; i >= 0; i--) { const p = puffs[i]; p.life -= 0.02; p.y -= 0.15;
+    if (p.life <= 0) { puffs.splice(i, 1); continue; } cx.globalAlpha = p.life * 0.5; px(cx, p.x - 3, p.y - 3, 6 + (1 - p.life) * 8, 6 + (1 - p.life) * 8, "#d8d8e0"); cx.globalAlpha = 1; }
+  const hour = state ? state.hour : new Date().getHours();
+  if (nightAmount(hour) < .5 && Math.sin(t * 1.3) > 0.2 && Math.random() < .6) for (let i = 0; i < 3; i++) px(cx, 19.4 * T + Math.random() * 14, 15.6 * T + Math.random() * 6, 1, 1, Math.random() < .5 ? "#ffe060" : "#ffffff");
+  if (now > train.next && train.x < -300) train.x = W * T + 40;
+  if (train.x > -400) { train.x -= 1.6; const y = 20 * T + 2;
+    px(cx, train.x, y - 2, 30, 12, "#2a3a5a"); px(cx, train.x + 2, y - 5, 10, 4, "#2a3a5a"); px(cx, train.x + 3, y - 4, 5, 2, "#ffe070");
+    ["#8a4a2a", "#4a6a8a", "#6a6a3a", "#7a3a3a", "#5a5a5a", "#8a6a3a", "#3a5a4a"].forEach((c, i) => { const bx = train.x + 34 + i * 33; px(cx, bx, y, 31, 10, c); px(cx, bx, y, 31, 2, "#ffffff22"); });
+    if (train.x < -300) train.next = now + 25000 + Math.random() * 30000; }
+  // things lying around town
+  if (state) for (const k of new Set(state.items.map(i => i.place))) if (P[k]) {
+    const sx = P[k].x * T + 10, sy = P[k].y * T + 8, on = Math.sin(t * 5 + sx) > 0;
+    px(cx, sx - 1, sy - 4, 2, 9, on ? "#fff8b0" : "#ffe060"); px(cx, sx - 4, sy - 1, 9, 2, on ? "#fff8b0" : "#ffe060"); if (on) px(cx, sx - 1, sy - 1, 2, 2, "#ffffff");
+  }
+  // a new piece of graffiti you haven't looked at: one splat per place, however many there are
+  for (const k of newPlaces()) if (P[k]) drawSplat(P[k].x * T - 14, P[k].y * T + 6, t);
+  const spooky = isHalloween();
+  if (spooky) drawHalloween(t, hour, false);
+  const seen = state ? state.creatures.filter(c => c.seen !== null) : [];
+  for (const c of seen) drawBird(c, now, t);
+  const wx = state ? state.weather.kind : "clear";
+  if (wx === "rain" || wx === "thunderstorm") { cx.fillStyle = "#c8dcffaa"; for (let i = 0; i < 260; i++) { const rx = (i * 97 + t * 300) % (W * T), ry = (i * 53 + t * 520) % (H * T); cx.fillRect(rx, ry, 1, 7); }
+    cx.fillStyle = "rgba(40,50,70,0.18)"; cx.fillRect(0, 0, W * T, H * T); }
+  if (wx === "thunderstorm" && (t % 7) < 0.12) { cx.fillStyle = "rgba(255,255,240,0.55)"; cx.fillRect(0, 0, W * T, H * T); }
+  if (wx === "snow") { cx.fillStyle = "rgba(240,244,252,0.22)"; cx.fillRect(0, 0, W * T, H * T); cx.fillStyle = "#ffffff";
+    for (let i = 0; i < 160; i++) { const fx = (i * 97 + Math.sin(t + i) * 12 + t * 20) % (W * T), fy = (i * 53 + t * 40) % (H * T); cx.fillRect(fx, fy, 2, 2); } }
+  if (state && state.season === "winter" && wx !== "snow") { cx.fillStyle = "rgba(235,240,250,0.16)"; cx.fillRect(0, 0, W * T, H * T); }
+  if (wx === "light rain") { cx.fillStyle = "#c8dcff88"; for (let i = 0; i < 140; i++) { const rx = (i * 97 + t * 220) % (W * T), ry = (i * 53 + t * 380) % (H * T); cx.fillRect(rx, ry, 1, 5); } }
+  if (wx === "foggy") { cx.fillStyle = "rgba(232,238,244,0.14)"; cx.fillRect(0, 0, W * T, H * T);
+    for (let i = 0; i < 7; i++) { const fx = ((t * 6 + i * 160) % (W * T + 400)) - 200, fy = 40 + i * 70;
+      const gr = cx.createRadialGradient(fx, fy, 0, fx, fy, 170); gr.addColorStop(0, "rgba(240,244,250,0.22)"); gr.addColorStop(1, "rgba(240,244,250,0)");
+      cx.fillStyle = gr; cx.fillRect(fx - 170, fy - 170, 340, 340); } }
+  if (wx === "windy") { cx.fillStyle = "#ffffff55"; for (let i = 0; i < 18; i++) { const lx = (i * 131 + t * 300) % (W * T + 60) - 60, ly = (i * 71) % (H * T); cx.fillRect(lx, ly, 14 + (i % 3) * 6, 1); } }
+  if (wx === "cloudy") { cx.fillStyle = "rgba(60,70,90,0.12)"; cx.fillRect(0, 0, W * T, H * T); }
+  if (wx === "cold and bright") { cx.fillStyle = "rgba(220,235,255,0.10)"; cx.fillRect(0, 0, W * T, H * T); }
+  if (showNames) { cx.font = "8px 'Press Start 2P', monospace"; cx.textAlign = "center";
+    for (const p of Object.values(P)) { const label = p.name, wdt = cx.measureText(label).width + 8, lx = p.x * T, ly = p.y * T + 26;
+      cx.globalAlpha = .82; px(cx, lx - wdt / 2, ly - 9, wdt, 12, "#1d2333"); cx.globalAlpha = 1; cx.fillStyle = "#f8f4e3"; cx.fillText(label, lx, ly); }
+    cx.textAlign = "start"; }
+  const n = nightAmount(hour);
+  if (n > 0) { cx.fillStyle = `rgba(16,20,60,${0.55 * n})`; cx.fillRect(0, 0, W * T, H * T);
+    if (n > .4) { cx.fillStyle = "#ffe08a"; [[13.5 * T + 9, 13 * T + 19], [13.5 * T + 43, 13 * T + 19], [20.5 * T + 9, 26.5 * T + 23], [20.5 * T + 23, 26.5 * T + 23], [20.5 * T + 37, 26.5 * T + 23], [20.5 * T + 73, 26.5 * T + 23], [20.5 * T + 87, 26.5 * T + 23], [29 * T + 9, 26.3 * T + 17], [29 * T + 93, 26.3 * T + 17], [13.5 * T + 7, 21 * T + 19]]
+      .forEach(([x, y]) => cx.fillRect(x, y, 4, 3)); } }
+  if (spooky) drawHalloween(t, hour, true);
+  // speech bubbles last, so they read even at night: each creature's newest line from the last 90 seconds
+  if (state) { const said = new Set(), taken = [];
+    for (const line of state.talk) if (line.ago + sinceSeconds() < 90 && !said.has(line.from)) {
+      said.add(line.from); const c = seen.find(x => x.id === line.from); if (c && c.place === line.place) drawBubble(c, line, taken); } }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ======================= UI =======================
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const placeName = k => (P[k] && P[k].name) || (state && state.places[k]) || k;
+function ago(s) { s = Math.max(0, Math.round(s)); return s < 60 ? "just now" : s < 3600 ? `${s / 60 | 0} min ago` : s < 86400 ? `${s / 3600 | 0} h ago` : `${s / 86400 | 0} d ago`; }
+
+async function poll() {
+  if (document.hidden) return;                 // a phone in a pocket doesn't need updates
+  try {
+    const r = await fetch("/v1/map", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    state = await r.json(); online = true; polledAt = Date.now();
+    const seen = state.creatures.filter(c => c.seen !== null);
+    for (const c of seen) { const bd = birdFor(c), [x, y] = spot(c, seen); flyTo(bd, x, y, bd.at === null); bd.at = c.place; }
+    const w = state.weather, clock = state.now.slice(11, 16);
+    $("meta").textContent = `${clock} · ${w.kind}, ${w.temp_f}°F · ${state.season}`;
+    $("cards").innerHTML = state.creatures.map(c => {
+      const where = c.seen === null ? "hasn't visited yet" : `${placeName(c.place)} · ${c.state === "quiet" ? "away" : c.state}`;
+      return `<button class="card ${esc(LOOK[c.id] || "gray")}" data-id="${esc(c.id)}"><b>${esc(c.name.toUpperCase())}</b>
+        <span>${esc(where)}${c.tagging && c.state === "awake" ? " · tagging " + esc(c.tagging.name)
+                             : c.doing && c.state === "awake" ? " · " + esc(c.doing) : ""}</span>
+        <small>${c.seen === null ? "" : "checked in " + ago(c.seen + sinceSeconds())}</small></button>`; }).join("");
+    const talk = state.talk.slice(0, 5).reverse();
+    if (talk.length) {
+      $("who").textContent = "TOWN TALK";
+      $("lines").innerHTML = talk.map(l => `<p><b>${esc(l.name)}</b>${l.to ? " to " + esc(l.to) : ""}: “${esc(l.text)}”
+        <span class="when">${esc(placeName(l.place))}, ${ago(l.ago)}</span></p>`).join("");
+    } else {
+      $("who").textContent = "AROUND TOWN";
+      $("lines").innerHTML = state.events.slice(0, 4).map(e => `<p>${esc(e.text)} <span class="when">${esc(placeName(e.place))}, ${ago(e.ago)}</span></p>`).join("")
+        || "<p>Quiet. Nobody's out yet.</p>";
+    }
+    if (openPlaceId) fillPlace(openPlaceId);
+  } catch {
+    online = false; $("meta").innerHTML = '<span class="offline">the town server isn\'t answering</span>';
+  }
+}
+setInterval(poll, 5000); poll();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+
+// tap a place to see who and what's there
+let openPlaceId = null;
+function canvasTile(ev) { const r = cv.getBoundingClientRect(); return [(ev.clientX - r.left) / r.width * W, (ev.clientY - r.top) / r.height * H, ev.clientX - r.left, ev.clientY - r.top]; }
+cv.addEventListener("mousemove", ev => { const [x, y, sx, sy] = canvasTile(ev), k = placeAt(x, y), tag = $("tag");
+  if (k) { tag.textContent = P[k].name; tag.style.left = sx + "px"; tag.style.top = sy + "px"; tag.style.display = "block"; } else tag.style.display = "none"; });
+cv.addEventListener("mouseleave", () => $("tag").style.display = "none");
+cv.addEventListener("click", ev => { const [x, y] = canvasTile(ev), k = placeAt(x, y); if (k) { openPlaceId = k; newOnOpen = new Set(); fillPlace(k); $("placeSheet").classList.add("open"); } });
+function fillPlace(k) {
+  const s = state || { creatures: [], items: [], events: [] };
+  $("pName").textContent = P[k].name.toUpperCase();
+  const here = s.creatures.filter(c => c.seen !== null && c.place === k);
+  $("pWho").innerHTML = here.length ? here.map(c => `<li>${esc(c.name)}, ${c.state === "quiet" ? "away" : esc(c.state)}${c.doing && c.state === "awake" ? ", " + esc(c.doing) : ""}</li>`).join("")
+    : "<li>nobody</li>";
+  const items = s.items.filter(i => i.place === k);
+  $("pItems").innerHTML = items.length ? items.map(i => `<li>${esc(i.name)}${i.for ? ` <span class="when">(${esc(i.by)} left it for ${esc(i.for)})</span>` : ` <span class="when">(from ${esc(i.by)})</span>`}</li>`).join("")
+    : "<li>nothing</li>";
+  const ev = s.events.filter(e => e.place === k).slice(0, 6);
+  $("pEvents").innerHTML = ev.length ? ev.map(e => `<li>${esc(e.text)} <span class="when">${ago(e.ago)}</span></li>`).join("") : "<li>nothing lately</li>";
+  fillWalls(k);
+}
+
+// ======================= graffiti =======================
+// Only two things ever show on the canvas: a spray can on a creature while it's tagging, and one splat on a
+// place with a piece from the last day that this viewer hasn't opened. The art itself is in the place sheet.
+const KIND_NAMES = { tag: "tag", throwup: "throw-up", mural: "mural" }, NEW_FOR = 86400, FADES_AFTER = 30 * 86400;
+let seenMarks = new Set(), newOnOpen = new Set(), wallsSig = "", wallsData = null, wallsHtml = "", viewing = null;
+try { seenMarks = new Set(JSON.parse(localStorage.getItem("shasta_seen_marks") || "[]")); } catch {}
+function saveSeen() { try { localStorage.setItem("shasta_seen_marks", JSON.stringify([...seenMarks].slice(-300))); } catch {} }
+const isNew = m => m.ago + sinceSeconds() < NEW_FOR && !seenMarks.has(m.id);
+function newPlaces() { return state && state.marks ? new Set(state.marks.filter(isNew).map(m => m.place)) : new Set(); }
+// Halloween (Bolt's world.html has the same): a jack-o'-lantern at every place, bats overhead, an orange glow
+// after dark. Oct 31 only. The pumpkin sits left of the graffiti splat; its glow and lit face are drawn again
+// after the night tint (glowing), so they shine through it.
+function isHalloween() { const d = new Date(); return d.getMonth() === 9 && d.getDate() === 31; }
+function drawHalloween(t, hour, glowing) {
+  const dark = nightAmount(hour);
+  for (const p of Object.values(P)) {
+    const jx = Math.round(p.x * T - 34), jy = Math.round(p.y * T + 4), lit = dark > .3 && Math.sin(t * 6 + jx) > -0.6;
+    if (glowing) {
+      if (dark <= .3) continue;
+      cx.globalAlpha = .25 * dark; px(cx, jx - 4, jy - 4, 18, 16, "#ff9a2a"); cx.globalAlpha = 1;
+    } else {
+      px(cx, jx + 4, jy - 2, 2, 2, "#3a6a2a");                                  // stem
+      px(cx, jx, jy, 10, 8, "#e8701a"); px(cx, jx + 1, jy - 1, 8, 1, "#e8701a"); px(cx, jx + 1, jy + 8, 8, 1, "#c45a10");
+    }
+    if (glowing !== lit) continue;
+    const eye = lit ? "#ffe060" : "#3a1a08";
+    px(cx, jx + 2, jy + 2, 2, 2, eye); px(cx, jx + 6, jy + 2, 2, 2, eye); px(cx, jx + 2, jy + 5, 6, 1, eye); px(cx, jx + 3, jy + 6, 4, 1, eye);
+  }
+  if (glowing) { cx.fillStyle = `rgba(255,120,30,${0.07 * dark})`; cx.fillRect(0, 0, W * T, H * T); return; }
+  for (let i = 0; i < 6; i++) {                                                 // bats on lazy loops
+    const bx = ((t * (18 + i * 4) + i * 140) % (W * T + 80)) - 40, by = 30 + i * 22 + Math.sin(t * 2 + i) * 10, up = Math.sin(t * 12 + i) > 0;
+    px(cx, bx - 1, by, 3, 2, "#1a1020"); px(cx, bx - 5, by + (up ? -2 : 1), 4, 1, "#1a1020"); px(cx, bx + 2, by + (up ? -2 : 1), 4, 1, "#1a1020");
+  }
+}
+function drawSplat(x, y, t) {
+  const on = Math.sin(t * 3 + x) > 0, c1 = on ? "#ff5aa8" : "#e8408e";
+  px(cx, x - 4, y - 3, 9, 7, c1); px(cx, x - 6, y - 1, 13, 3, c1); px(cx, x - 2, y - 5, 5, 11, c1);
+  px(cx, x + 5, y - 6, 2, 2, c1); px(cx, x - 8, y + 3, 2, 2, c1); px(cx, x, y + 6, 2, on ? 4 : 3, c1);
+  px(cx, x - 1, y - 1, 3, 3, "#ffd866");
+}
+function drawSpray(bd, t) {
+  const x = Math.round(bd.x + 13), y = Math.round(bd.y - 26), cols = ["#ff5aa8", "#ffd866", "#5ad8ff", "#7ae06a"];
+  px(cx, x - 1, y - 1, 8, 13, "#2a2a3a"); px(cx, x, y, 6, 11, "#3a6ccc"); px(cx, x, y + 3, 6, 2, "#f8f4e3");
+  px(cx, x + 1, y - 3, 4, 2, "#8a8a92"); px(cx, x + 2, y - 5, 2, 2, "#2a2a3a");
+  for (let i = 0; i < 6; i++) { const k = (t * 1.4 + i / 6) % 1, s = 2 + k * 3;
+    cx.globalAlpha = 1 - k; px(cx, x + 5 + k * 16, y - 5 - k * 6 + Math.sin(t * 5 + i) * 2, s, s, cols[i % 4]); }
+  cx.globalAlpha = 1;
+}
+async function fillWalls(k) {
+  const tops = state && state.marks ? state.marks.filter(m => m.place === k) : [];
+  let changed = false;
+  for (const m of tops) if (isNew(m)) { newOnOpen.add(m.id); seenMarks.add(m.id); changed = true; }   // you're looking at it now
+  if (changed) saveSeen();
+  const sig = k + "|" + tops.map(m => m.id).join(",");
+  if (sig !== wallsSig) {
+    wallsSig = sig;
+    try { const r = await fetch("/v1/marks?place=" + encodeURIComponent(k), { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status); wallsData = await r.json(); }
+    catch { wallsData = null; wallsSig = ""; }
+  }
+  if (openPlaceId === k) renderWalls(k);
+}
+function pieceLine(p, w) { return `${p.by}'s ${KIND_NAMES[p.kind] || p.kind} on ${w.name}, ${ago(p.ago)}`; }
+function renderWalls(k) {
+  const walls = wallsData && wallsData.place === k ? wallsData.walls : [];
+  $("pWallsH").style.display = $("pWalls").style.display = walls.length ? "" : "none";
+  const html = walls.map((w, wi) => {
+    const p = w.pieces[0];
+    if (!p) return `<div class="wall"><div class="bare">bare</div><b>${esc(w.name.toUpperCase())}</b></div>`;
+    const pic = p.img ? `<img src="${esc(p.img)}" loading="lazy" alt="${esc(p.title || KIND_NAMES[p.kind])}"${p.ago > FADES_AFTER ? ' class="faded"' : ""}>`
+                      : `<div class="bare">worn away</div>`;
+    return `<button class="wall" data-w="${wi}">${pic}<b>${esc((p.title || KIND_NAMES[p.kind] || "").toUpperCase())}${newOnOpen.has(p.id) ? ' <span class="new">NEW</span>' : ""}</b>
+      <small>${esc(pieceLine(p, w))}${w.pieces.length > 1 ? ` · ${w.pieces.length - 1} older` : ""}</small></button>`;
+  }).join("");
+  if (html !== wallsHtml) { wallsHtml = html; $("pWalls").innerHTML = html; }
+}
+$("pWalls").addEventListener("click", ev => { const b = ev.target.closest(".wall[data-w]"); if (!b || !wallsData) return;
+  viewing = { w: wallsData.walls[+b.dataset.w], i: 0 }; showPiece(); $("viewer").classList.add("open"); });
+function showPiece() {
+  const { w, i } = viewing, p = w.pieces[i], img = $("vImg");
+  $("vTitle").textContent = (p.title || KIND_NAMES[p.kind] || "").toUpperCase();
+  if (p.img) { img.src = p.img; img.alt = p.title || KIND_NAMES[p.kind]; img.className = p.ago > FADES_AFTER ? "faded" : ""; img.style.display = ""; }
+  else img.style.display = "none";
+  $("vCap").textContent = pieceLine(p, w) + (i > 0 ? ` · painted over ${ago(w.pieces[i - 1].ago)}` : "")
+    + (p.img ? "" : " · the picture has worn away") + ` · ${i + 1} of ${w.pieces.length}`;
+  $("vOlder").disabled = i >= w.pieces.length - 1; $("vNewer").disabled = i === 0;
+}
+$("vOlder").onclick = () => { viewing.i++; showPiece(); };
+$("vNewer").onclick = () => { viewing.i--; showPiece(); };
+const closeViewer = () => { viewing = null; $("viewer").classList.remove("open"); };
+document.querySelector("[data-vclose]").onclick = closeViewer;
+$("viewer").addEventListener("click", ev => { if (ev.target.id === "viewer") closeViewer(); });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && viewing) closeViewer(); });
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => { openPlaceId = null; $("placeSheet").classList.remove("open"); });
+$("placeSheet").addEventListener("click", ev => { if (ev.target.id === "placeSheet") { openPlaceId = null; $("placeSheet").classList.remove("open"); } });
+
+$("namesBtn").onclick = () => { showNames = !showNames; try { localStorage.setItem("shasta_names", showNames ? "1" : "0"); } catch {} };
+function centerOn(bd) { const st = $("stage"); if (!bd || !st.classList.contains("zoom")) return;
+  st.scrollTo({ left: bd.toX / (W * T) * cv.clientWidth - st.clientWidth / 2, top: bd.toY / (H * T) * cv.clientHeight - st.clientHeight / 2, behavior: "smooth" }); }
+$("zoomBtn").onclick = () => { const st = $("stage"); st.classList.toggle("zoom"); st.style.height = st.classList.contains("zoom") ? Math.min(innerHeight * 0.55, 520) + "px" : "";
+  setTimeout(() => centerOn(Object.values(birds)[0]), 50); };
+$("cards").addEventListener("click", ev => { const b = ev.target.closest(".card"); if (!b) return;
+  const st = $("stage"); if (!st.classList.contains("zoom")) $("zoomBtn").click(); setTimeout(() => centerOn(birds[b.dataset.id]), 80); });
+</script>
+</body>
+</html>

@@ -81,6 +81,34 @@ crash with the same ids. The world remembers ids for 30 days, and a creature giv
 entry after 30 days (a `give`/`drop` item returns to its hoard). Creatures poll `inbox` from a
 background thread so a long turn never makes them quiet.
 
+**2026-10-29: the shared map** (Elliott proposed, Caelan approved it going live)
+The world serves a read-only town map at `/`, drawn entirely in the viewer's browser from Bolt's
+world-page art plus Spike's fir. It polls `GET /v1/map`, which needs no token because the server
+only listens on the tailnet. Looking never checks a creature in and shows only what anyone in town
+could see: never deliveries, limits or tokens. Nothing on the map can make a creature do anything.
+Bolt's own page can poll `/v1/map` for its town view too.
+
+**2026-10-29: deploy from underworld while GitHub is down** (Elliott, Caelan)
+GitHub suspended Elliott's account, so until it's back the repo lives on underworld at
+`/srv/git/shasta-world.git` (pushed to over SSH by Elliott's machine) and the server's auto-deploy
+watches that instead of GitHub. Same rule: main goes live only after every test passes. A change goes
+on its own branch first and is merged into main only when the other owner OKs it, recorded here.
+Caelan sends his changes as a git bundle or patch (over Discord) and Elliott's Claude applies them.
+When GitHub is back, everything is pushed there, history included, and the server points back at it.
+
+**2026-10-29: creatures see where everyone else is** (Elliott proposed, Caelan OK'd the `around-town` branch)
+`perceive` gains `around` (every other connected creature's place and state) and the summary an
+"Around town:" line, so Spike and Bolt can go find each other on purpose instead of meeting by
+chance. Unknown fields are ignored, so it changes nothing for a creature that doesn't use it.
+
+**2026-10-30: graffiti, protocol v0.2** (Elliott proposed in `GRAFFITI.md`, Caelan OK'd it as written)
+Creatures can paint the town's walls: `tag` to start, `PUT /v1/marks/<id>` to put a picture up, `walls`
+in `perceive` and one summary line, and the map shows the art when a place is tapped. Caelan's answers,
+all as proposed: v0.2 is fine (additive, nothing changes for Bolt); **nobody paints over another
+creature's piece**; **no walls at Bolt's nest**; the "On the walls" summary line is fine; **4 pieces a
+day** per creature. The map only ever shows two notices: someone tagging now, and one badge per place
+with a new piece you haven't looked at.
+
 ## Open
 
 Settled when both owners approve the phase 2 pull request:

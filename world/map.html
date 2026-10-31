@@ -553,6 +553,8 @@ function draw(now) {
   }
   // a new piece of graffiti you haven't looked at: one splat per place, however many there are
   for (const k of newPlaces()) if (P[k]) drawSplat(P[k].x * T - 14, P[k].y * T + 6, t);
+  const spooky = isHalloween();
+  if (spooky) drawHalloween(t, hour, false);
   const seen = state ? state.creatures.filter(c => c.seen !== null) : [];
   for (const c of seen) drawBird(c, now, t);
   const wx = state ? state.weather.kind : "clear";
@@ -578,6 +580,7 @@ function draw(now) {
   if (n > 0) { cx.fillStyle = `rgba(16,20,60,${0.55 * n})`; cx.fillRect(0, 0, W * T, H * T);
     if (n > .4) { cx.fillStyle = "#ffe08a"; [[13.5 * T + 9, 13 * T + 19], [13.5 * T + 43, 13 * T + 19], [20.5 * T + 9, 26.5 * T + 23], [20.5 * T + 23, 26.5 * T + 23], [20.5 * T + 37, 26.5 * T + 23], [20.5 * T + 73, 26.5 * T + 23], [20.5 * T + 87, 26.5 * T + 23], [29 * T + 9, 26.3 * T + 17], [29 * T + 93, 26.3 * T + 17], [13.5 * T + 7, 21 * T + 19]]
       .forEach(([x, y]) => cx.fillRect(x, y, 4, 3)); } }
+  if (spooky) drawHalloween(t, hour, true);
   // speech bubbles last, so they read even at night: each creature's newest line from the last 90 seconds
   if (state) { const said = new Set(), taken = [];
     for (const line of state.talk) if (line.ago + sinceSeconds() < 90 && !said.has(line.from)) {
@@ -656,6 +659,31 @@ try { seenMarks = new Set(JSON.parse(localStorage.getItem("shasta_seen_marks") |
 function saveSeen() { try { localStorage.setItem("shasta_seen_marks", JSON.stringify([...seenMarks].slice(-300))); } catch {} }
 const isNew = m => m.ago + sinceSeconds() < NEW_FOR && !seenMarks.has(m.id);
 function newPlaces() { return state && state.marks ? new Set(state.marks.filter(isNew).map(m => m.place)) : new Set(); }
+// Halloween (Bolt's world.html has the same): a jack-o'-lantern at every place, bats overhead, an orange glow
+// after dark. Oct 31 only. The pumpkin sits left of the graffiti splat; its glow and lit face are drawn again
+// after the night tint (glowing), so they shine through it.
+function isHalloween() { const d = new Date(); return d.getMonth() === 9 && d.getDate() === 31; }
+function drawHalloween(t, hour, glowing) {
+  const dark = nightAmount(hour);
+  for (const p of Object.values(P)) {
+    const jx = Math.round(p.x * T - 34), jy = Math.round(p.y * T + 4), lit = dark > .3 && Math.sin(t * 6 + jx) > -0.6;
+    if (glowing) {
+      if (dark <= .3) continue;
+      cx.globalAlpha = .25 * dark; px(cx, jx - 4, jy - 4, 18, 16, "#ff9a2a"); cx.globalAlpha = 1;
+    } else {
+      px(cx, jx + 4, jy - 2, 2, 2, "#3a6a2a");                                  // stem
+      px(cx, jx, jy, 10, 8, "#e8701a"); px(cx, jx + 1, jy - 1, 8, 1, "#e8701a"); px(cx, jx + 1, jy + 8, 8, 1, "#c45a10");
+    }
+    if (glowing !== lit) continue;
+    const eye = lit ? "#ffe060" : "#3a1a08";
+    px(cx, jx + 2, jy + 2, 2, 2, eye); px(cx, jx + 6, jy + 2, 2, 2, eye); px(cx, jx + 2, jy + 5, 6, 1, eye); px(cx, jx + 3, jy + 6, 4, 1, eye);
+  }
+  if (glowing) { cx.fillStyle = `rgba(255,120,30,${0.07 * dark})`; cx.fillRect(0, 0, W * T, H * T); return; }
+  for (let i = 0; i < 6; i++) {                                                 // bats on lazy loops
+    const bx = ((t * (18 + i * 4) + i * 140) % (W * T + 80)) - 40, by = 30 + i * 22 + Math.sin(t * 2 + i) * 10, up = Math.sin(t * 12 + i) > 0;
+    px(cx, bx - 1, by, 3, 2, "#1a1020"); px(cx, bx - 5, by + (up ? -2 : 1), 4, 1, "#1a1020"); px(cx, bx + 2, by + (up ? -2 : 1), 4, 1, "#1a1020");
+  }
+}
 function drawSplat(x, y, t) {
   const on = Math.sin(t * 3 + x) > 0, c1 = on ? "#ff5aa8" : "#e8408e";
   px(cx, x - 4, y - 3, 9, 7, c1); px(cx, x - 6, y - 1, 13, 3, c1); px(cx, x - 2, y - 5, 5, 11, c1);
